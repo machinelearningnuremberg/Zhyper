@@ -106,7 +106,7 @@ class TrainingArguments:
     training_task: Literal["sft", "recon"] = field(default="sft", metadata={"help": "SFT vs reconstruction training."})
     model_dir: str = field(default=None, metadata={"help": "The model directory."})
     emb_model: str = field(default="", metadata={"help": "The embedding model."})
-    exp_setup: Literal["lora", "vera", "hyper_lora", "hyper_vera"] = field(
+    exp_setup: Literal["lora", "vera", "hyper_lora", "z_hyper_lora", "hyper_vera"] = field(
         default=None, metadata={"help": "The finetuning setup."}
     )
     sft_mode: Literal["causal_lm", "completion"] = field(

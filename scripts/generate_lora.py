@@ -89,7 +89,7 @@ if __name__ == "__main__":
     )
     encoder_out = hypermod.task_encoder(task_emb)
     encoded_task_emb = encoder_out["encoded_task_emb"].detach()
-    lora_sd = hypermod.gen_lora(layer_indices, encoded_task_emb)
+    lora_sd = hypermod.gen_lora(layer_indices, encoded_task_emb) # TODO: add model
     lora_dir = f"{hypermod_dir}/extras/user_generated/{curtime}_{uuid}/"
     save_lora(lora_sd, peft_config, lora_dir)
     with open(f"{lora_dir}/task_desc.txt", "w") as f:

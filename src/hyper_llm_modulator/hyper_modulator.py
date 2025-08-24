@@ -216,47 +216,73 @@ class MLPResidualBlock(nn.Module):
         return x + self.mlp(x)
 
 
-def zero_lora_param_dict(target_modules, n_layers, rank, in_features, out_features):
-    return nn.ParameterDict(
+def zero_lora_param_dict(target_modules, n_layers, rank, in_features, out_features, exp_setup=None):
+    if "z" in exp_setup:
+        return nn.ParameterDict(
         {
-            "A": nn.ParameterDict(
+            "Z": nn.ParameterDict(
                 {
                     m: nn.Parameter(
-                        torch.zeros(n_layers, rank, in_features[m]), requires_grad=False
+                        torch.zeros(n_layers, rank, rank), requires_grad=False
                     )
                     for m in target_modules
                 }
-            ),
-            "B": nn.ParameterDict(
-                {
-                    m: nn.Parameter(
-                        torch.zeros(n_layers, out_features[m], rank),
-                        requires_grad=False,
-                    )
-                    for m in target_modules
-                }
-            ),
+            )
         }
     )
+    else:
+        return nn.ParameterDict(
+            {
+                "A": nn.ParameterDict(
+                    {
+                        m: nn.Parameter(
+                            torch.zeros(n_layers, rank, in_features[m]), requires_grad=False
+                        )
+                        for m in target_modules
+                    }
+                ),
+                "B": nn.ParameterDict(
+                    {
+                        m: nn.Parameter(
+                            torch.zeros(n_layers, out_features[m], rank),
+                            requires_grad=False,
+                        )
+                        for m in target_modules
+                    }
+                ),
+            }
+        )
 
 
-def lora_tensor_dict_to_param_dict(lora_tensor_dict, requires_grad):
-    return nn.ParameterDict(
-        {
-            "A": nn.ParameterDict(
-                {
-                    k: nn.Parameter(v, requires_grad)
-                    for k, v in lora_tensor_dict["A"].items()
-                }
-            ),
-            "B": nn.ParameterDict(
-                {
-                    k: nn.Parameter(v, requires_grad)
-                    for k, v in lora_tensor_dict["B"].items()
-                }
-            ),
-        }
-    )
+def lora_tensor_dict_to_param_dict(lora_tensor_dict, requires_grad, exp_setup=None):
+    if "z" in exp_setup:
+        return nn.ParameterDict(
+            {
+                "A": nn.ParameterDict(
+                    {
+                        k: nn.Parameter(v, requires_grad)
+                        for k, v in lora_tensor_dict["A"].items()
+                    }
+                ),
+                "B": nn.ParameterDict(
+                    {
+                        k: nn.Parameter(v, requires_grad)
+                        for k, v in lora_tensor_dict["B"].items()
+                    }
+                ),
+            }
+        )
+    else:
+        return nn.ParameterDict(
+            {
+                "Z": nn.ParameterDict(
+                    {
+                        k: nn.Parameter(v, requires_grad)
+                        for k, v in lora_tensor_dict["Z"].items()
+                    }
+                )
+            }
+        )
 
 
 class HyperModulator(nn.Module):
@@ -284,6 +310,7 @@ class HyperModulator(nn.Module):
         factorized: bool = False,
         delta_w_scaling: float = 10000,
         dtype: torch.dtype = torch.float32,
+        exp_setup: Optional[str] = None, # if z_hyper_lora 
     ):
         assert output_space == "lora", f"Invalid output space: {output_space}"
         assert (not shared_AB_head) or output_space == "lora", (
@@ -316,7 +343,10 @@ class HyperModulator(nn.Module):
         self.output_space = output_space
         self.max_num_layers = model_config.num_hidden_layers
 
-        self.target_modules = peft_config.target_modules
+        # for some reason this is buggy and the order is then incorrect between accelrate prcesses
+        # self.target_modules = peft_config.target_modules
+        
+        self.target_modules = sorted(list(peft_config.target_modules))
         self.module_to_int = {m: i for i, m in enumerate(self.target_modules)}
         self.task_to_int = dict()
 
@@ -324,6 +354,7 @@ class HyperModulator(nn.Module):
         self.delta_w_scaling = delta_w_scaling
         self.device = device = model.device
         self.dtype = dtype
+        self.exp_setup = exp_setup
 
         self.in_features, self.out_features = get_in_out_features(model, peft_config)
         n_layers = self.max_num_layers
@@ -333,13 +364,17 @@ class HyperModulator(nn.Module):
             peft_config.r,
             self.in_features,
             self.out_features,
+            self.exp_setup
         )
+        # print(self.AB_offset)
+        # raise RuntimeError()
         self.mean_recon_target = zero_lora_param_dict(
             self.target_modules,
             n_layers,
             peft_config.r,
             self.in_features,
             self.out_features,
+            self.exp_setup
         )
         self.std_recon_target = zero_lora_param_dict(
             self.target_modules,
@@ -347,18 +382,19 @@ class HyperModulator(nn.Module):
             peft_config.r,
             self.in_features,
             self.out_features,
+            self.exp_setup
         )
         if AB_offset is not None:
             self.AB_offset = lora_tensor_dict_to_param_dict(
-                AB_offset, requires_grad=learnable_AB_offset
+                AB_offset, requires_grad=learnable_AB_offset, exp_setup=self.exp_setup
             )
         if mean_recon_target is not None:
             self.mean_recon_target = lora_tensor_dict_to_param_dict(
-                mean_recon_target, requires_grad=False
+                mean_recon_target, requires_grad=False, exp_setup=self.exp_setup
             )
         if std_recon_target is not None:
             self.std_recon_target = lora_tensor_dict_to_param_dict(
-                std_recon_target, requires_grad=False
+                std_recon_target, requires_grad=False, exp_setup=self.exp_setup
             )
 
         # the input and output features for each target module (i.e. layer type)
@@ -475,19 +511,22 @@ class HyperModulator(nn.Module):
         for module in self.target_modules:
             in_features = self.in_features[module]
             out_features = self.out_features[module]
-            if not shared_AB_head:
-                output_size = (
-                    peft_config.r + out_features
-                    if output_space == "vera"
-                    else (peft_config.r * (in_features + out_features))
-                )
-                if autoreg_gen:
-                    output_size = in_features + out_features
-
+            if "z" in self.exp_setup:
+                output_size = peft_config.r * peft_config.r # z is square
             else:
-                output_size = peft_config.r * max(in_features, out_features)
-                if autoreg_gen:
-                    output_size = max(in_features, out_features)
+                if not shared_AB_head:
+                    output_size = (
+                        peft_config.r + out_features
+                        if output_space == "vera"
+                        else (peft_config.r * (in_features + out_features))
+                    )
+                    if autoreg_gen:
+                        output_size = in_features + out_features
+
+                else:
+                    output_size = peft_config.r * max(in_features, out_features)
+                    if autoreg_gen:
+                        output_size = max(in_features, out_features)
 
             logger.debug(f"head_in_size: {head_in_size}, output_size: {output_size}")
             logger.debug(f"head_use_bias: {head_use_bias}")
@@ -498,67 +537,76 @@ class HyperModulator(nn.Module):
                 logger.debug(f"zeroing out head weights for {module}")
                 nn.init.zeros_(layer.weight)
 
-            heads.append((module, layer))
+            heads.append((module, layer)) # (q_proj, LinearLayer), (v_proj, LinearLayer)
         self.heads = nn.ModuleDict(heads)
-        peft_weights = get_init_peft_weights(model, peft_config)
-        logger.debug(f"peft_weights:\n{peft_weights}")
 
-        self.split_shapes = dict()
-        # we use the trainable peft weights of the base peft model
-        # to initialize the bias of the heads
-        for module_name, head in self.heads.items():
-            if output_space == "lora":
-                A = peft_weights[module_name]["lora_A"].weight.clone().flatten()
-                B = peft_weights[module_name]["lora_B"].weight.clone().flatten()
-                init_bias = [A, B]
+        if "z" not in self.exp_setup:
+            peft_weights = get_init_peft_weights(model, peft_config)
+            logger.debug(f"peft_weights:\n{peft_weights}")
 
-            elif output_space == "vera":
-                # d init with a constant value (0.1) and b with zeros
-                # for vera, we're using the outputs of the hypernet as masking + scaling values
-                d = peft_weights[module_name]["vera_lambda_d"].clone().flatten()  # 0.1
-                b = peft_weights[module_name]["vera_lambda_b"].clone().flatten()  # 0
-                init_bias = [d, b]
+            self.split_shapes = dict()
+            # we use the trainable peft weights of the base peft model
+            # to initialize the bias of the heads
+            # TODO: how to do it with z?
+            for module_name, head in self.heads.items():
+                if output_space == "lora":
+                    A = peft_weights[module_name]["lora_A"].weight.clone().flatten()
+                    B = peft_weights[module_name]["lora_B"].weight.clone().flatten()
+                    init_bias = [A, B]
 
-                # we just need one copy of A and B
-                vera_A_B_learnable = True
-                self.vera_A = nn.Parameter(
-                    peft_weights[module_name]["vera_A"],
-                    requires_grad=vera_A_B_learnable,
-                )
-                self.vera_B = nn.Parameter(
-                    peft_weights[module_name]["vera_B"],
-                    requires_grad=vera_A_B_learnable,
-                )
+                elif output_space == "vera":
+                    # d init with a constant value (0.1) and b with zeros
+                    # for vera, we're using the outputs of the hypernet as masking + scaling values
+                    d = peft_weights[module_name]["vera_lambda_d"].clone().flatten()  # 0.1
+                    b = peft_weights[module_name]["vera_lambda_b"].clone().flatten()  # 0
+                    init_bias = [d, b]
 
-            with torch.no_grad():
-                if match_lora_init and head.bias is not None:
-                    nn.init.zeros_(head.weight)
-                    nn.init.zeros_(head.bias)
-                    if (not shared_AB_head) and (not autoreg_gen):
-                        # based on https://proceedings.mlr.press/v205/beck23a/beck23a.pdf (bias-HyperInit)
-                        # this encourages the hnet to initially use some shared values of the output
-                        # also an easy way to match initialization of the corresponding method!
-                        head.bias.copy_(torch.cat(init_bias))
+                    # we just need one copy of A and B
+                    vera_A_B_learnable = True
+                    self.vera_A = nn.Parameter(
+                        peft_weights[module_name]["vera_A"],
+                        requires_grad=vera_A_B_learnable,
+                    )
+                    self.vera_B = nn.Parameter(
+                        peft_weights[module_name]["vera_B"],
+                        requires_grad=vera_A_B_learnable,
+                    )
 
-                    # match the gradient scale to the full architecture
-                    elif shared_AB_head:
-                        if not autoreg_gen:
-                            head.bias.copy_(init_bias[0] / sqrt(2))
+                with torch.no_grad():
+                    if match_lora_init and head.bias is not None:
+                        nn.init.zeros_(head.weight)
+                        nn.init.zeros_(head.bias)
+                        if (not shared_AB_head) and (not autoreg_gen):
+                            # based on https://proceedings.mlr.press/v205/beck23a/beck23a.pdf (bias-HyperInit)
+                            # this encourages the hnet to initially use some shared values of the output
+                            # also an easy way to match initialization of the corresponding method!
+                            head.bias.copy_(torch.cat(init_bias))
+
+                        # match the gradient scale to the full architecture
+                        elif shared_AB_head:
+                            if not autoreg_gen:
+                                head.bias.copy_(init_bias[0] / sqrt(2))
+                            else:
+                                size = head.bias.shape[0]
+                                head.bias.copy_(
+                                    init_bias[0][:size] / sqrt(2) / sqrt(peft_config.r)
+                                )
                         else:
                             size = head.bias.shape[0]
-                            head.bias.copy_(
-                                init_bias[0][:size] / sqrt(2) / sqrt(peft_config.r)
-                            )
-                    else:
-                        size = head.bias.shape[0]
-                        head.bias.copy_(init_bias[0][:size] / sqrt(peft_config.r))
+                            head.bias.copy_(init_bias[0][:size] / sqrt(peft_config.r))
 
-                # NOTE: how we slice the weights have to be consistent with the forward pass
-                self.split_shapes[module_name] = [len(x) for x in init_bias]
-                logger.debug(f"split_shapes: {self.split_shapes}")
+                    # NOTE: how we slice the weights have to be consistent with the forward pass
+                    # split_shapes: {'v_proj': [18432, 8192]} for each target module A, B
+                    self.split_shapes[module_name] = [len(x) for x in init_bias]
+                    logger.debug(f"split_shapes: {self.split_shapes}")
+                    # print(f"split_shapes: {self.split_shapes}")
+                    # raise RuntimeError()
+            del peft_weights
+        else:
+            self.split_shapes = dict() # TODO: does it make sense?
+            
 
         self.heads.to(device).to(dtype)
-        del peft_weights
 
     def _embed_layer_depth(
         self, depth_indices: list[int] | int | torch.Tensor
@@ -601,6 +649,8 @@ class HyperModulator(nn.Module):
 
         mlp_out = self.mlp1(mlp_inp)
         head = self.heads[layer_type]
+        if "z" in self.exp_setup:
+            return head(self.mlp3(self.mlp2(mlp_out)))
         if not self.shared_AB_head:
             # head outputs both A and B
             if not self.autoreg_gen:
@@ -688,6 +738,7 @@ class HyperModulator(nn.Module):
         encoded_task_emb: torch.Tensor = None,
         factorized: Optional[bool] = None,
     ) -> torch.Tensor:
+    # TODO rename to be meaningful for Z as well.
         if factorized is None:
             factorized = self.factorized
         bs = len(layer_indices)
@@ -697,6 +748,15 @@ class HyperModulator(nn.Module):
             layer_type,
             encoded_task_emb,
         )
+
+        if "z" in self.exp_setup:
+            if self.output_space == "lora":
+                # TODO: add offset here as well?
+                Z = splitted_out.reshape(
+                    bs, self.peft_config.r, self.peft_config.r
+                )  # .transpose(-1, -2)
+                return Z
+            
 
         if self.output_space == "lora":
             A, B = splitted_out
@@ -719,11 +779,13 @@ class HyperModulator(nn.Module):
         return deltaW
 
     @torch.no_grad()
-    def gen_lora(self, layer_indices, encoded_task_emb):
+    def gen_lora(self, layer_indices, encoded_task_emb, model):
+        is_z_setting = "z" in self.exp_setup
         assert encoded_task_emb.shape[0] == 1, (
             "Only one task at a time is supported for now"
         )
-        lora_A, lora_B = dict(), dict()
+        if not is_z_setting:
+            lora_A, lora_B = dict(), dict()
         for target_module in self.target_modules:
             factorized_delta_w = self.get_delta_weights(
                 layer_indices,
@@ -732,7 +794,8 @@ class HyperModulator(nn.Module):
                 factorized=True,
             )
             if self.output_space == "lora":
-                lora_A[target_module], lora_B[target_module] = factorized_delta_w
+                if not is_z_setting:
+                    lora_A[target_module], lora_B[target_module] = factorized_delta_w
 
         # save deltaW to lora state dict format
         lora_state_dict = dict()
@@ -740,13 +803,34 @@ class HyperModulator(nn.Module):
             for layer_idx in layer_indices:
                 for module_name in self.module_names[target_module][layer_idx]:
                     if "lora_A" in module_name:
-                        lora_state_dict[module_name] = (
-                            lora_A[target_module][layer_idx].cpu().contiguous()
-                        )
+                        if is_z_setting:
+                            A = getattr(
+                                model.base_model.model.model.layers[layer_idx].self_attn,
+                                target_module
+                            ).lora_A["default"].weight.clone().transpose(-1, -2)
+                            Z = factorized_delta_w[layer_idx]
+                            # A [in, r] Z [r, r]
+                            # output has to be [r, in]
+                            lora_state_dict[module_name] = ( # here we save A as A @ Z 
+                                (A @ Z).T.cpu().contiguous()
+                            )
+                        else:
+                            lora_state_dict[module_name] = (
+                                lora_A[target_module][layer_idx].cpu().contiguous()
+                            )
                     elif "lora_B" in module_name:
-                        lora_state_dict[module_name] = (
-                            lora_B[target_module][layer_idx].cpu().contiguous()
-                        )
+                        if is_z_setting:
+                            B = getattr(
+                                model.base_model.model.model.layers[layer_idx].self_attn,
+                                target_module
+                            ).lora_B["default"].weight.clone()
+                            lora_state_dict[module_name] = (
+                                B.cpu().contiguous()
+                            )
+                        else:
+                            lora_state_dict[module_name] = (
+                                lora_A[target_module][layer_idx].cpu().contiguous()
+                            )
                     else:
                         raise ValueError(f"Unexpected module name: {module_name}")
         if self.training_task == "recon":
@@ -866,6 +950,42 @@ def get_init_peft_weights(model: PeftModel, peft_config: PeftConfig = None):
 
     return peft_weights
 
+def get_peft_weights(model: PeftModel, peft_config: PeftConfig = None, layer: int = None, name: str = None):
+    if peft_config is None:
+        peft_config = model.peft_config["default"]
+    peft_weights = {module_name: dict() for module_name in peft_config.target_modules}
+    adapter_name = "default"
+    for module_name, module in model.named_modules():
+        if not check_target_module_exists(peft_config, module_name):
+            continue
+        if not isinstance(module, BaseTunerLayer):
+            continue
+        # support just Linear layer for now
+        # all modules should be a leave module that is Linear layer
+        assert isinstance(module.base_layer, nn.Linear), (
+            "all modules should be a leave module that is Linear layer"
+        )
+
+        # this should always pass
+        name = module_name.split(".")[-1]
+        assert name in peft_config.target_modules
+
+        for submodule_name, submodule in module.named_modules():
+            if not isinstance(submodule, (nn.ModuleDict, nn.ParameterDict, BufferDict)):
+                continue
+
+            if adapter_name not in submodule:
+                continue
+
+            if submodule_name not in peft_weights[name]:
+                peft_weights[name][submodule_name] = submodule[adapter_name]
+            else:
+                smod1 = peft_weights[name][submodule_name]
+                smod2 = submodule[adapter_name]
+                assert type(smod1) == type(smod2)
+
+    return peft_weights
+
 
 def save_lora(lora_state_dict, adapter_config, lora_dir):
     logger.debug(f"lora_dir: {lora_dir}")
@@ -934,19 +1054,23 @@ def create_hypermod(
         or (args.training_task == "recon" and not args.pred_z_score),
         factorized=getattr(args, "factorized", False),
         delta_w_scaling=getattr(args, "delta_w_scaling", 10000),
+        exp_setup=args.exp_setup
     ).to(device)
 
     return hypermod
 
 
-def save_hypermod_checkpoint(save_dir, hypermod, curstep):
+def save_hypermod_checkpoint(save_dir, hypermod, curstep, accelerator):
     save_path = f"{save_dir}/checkpoints/it_{curstep}/hypermod.pt"
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    torch.save(hypermod.state_dict(), save_path)
+    if accelerator.is_main_process:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        torch.save(hypermod.state_dict(), save_path)
+    # accelerator.save_model(hypermod, save_path)
+    accelerator.wait_for_everyone()
     return save_path
 
 
-def load_hypermod_checkpoint(checkpoint_path, device):
+def load_hypermod_checkpoint(checkpoint_path, peft_adapter_path, device):
     base_hypermod_dir = os.path.dirname(checkpoint_path)
     if "checkpoint" in base_hypermod_dir:
         base_hypermod_dir = base_hypermod_dir.split("checkpoint")[0]
@@ -967,6 +1091,7 @@ def load_hypermod_checkpoint(checkpoint_path, device):
         peft_config=peft_config,
         model_kwargs={"output_hidden_states": True, "output_attentions": False},
         device=device,
+        peft_adapter_path=peft_adapter_path
     )
     # train to output delta_w for all layers
     layer_indices = torch.tensor(

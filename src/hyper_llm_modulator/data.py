@@ -153,6 +153,8 @@ def load_and_format_dataset(metadata, tokenizer, sft_mode, is_intx_model, ds_nam
         logger.debug(f"Loading preprocessed dataset: {ds_hash}")
         formatted_dataset = datasets.load_from_disk(f"{TRANSFORMED_DS_DIR}/{ds_hash}")
     else:
+        if "trust_remote_code" not in list(ds_kwargs.keys()):
+            ds_kwargs["trust_remote_code"] = True
         dataset = load_dataset(**ds_kwargs)
         processed_dataset = dataset.map(get_preprocessing_fn(ds_name), batched=False)
 
@@ -179,13 +181,13 @@ def get_task_embs(
         # pre-embed task descriptions when using per-task descriptions
         if emb_model is not None:
             # NOTE: assume that the number of task descs are small so we pad them here only once
-            logger.debug(f"{ds_descs[ds_name]=}")
+            # logger.debug(f"{ds_descs[ds_name]=}")
             task_embs = embed_texts(descs, emb_model, emb_tokenizer, task_desc_format_fn, pooling_fn, device)
         else:
             # one-hot task indicator
             task_embs = torch.eye(len(ds_descs), device=device)[i].unsqueeze(0)
 
-        logger.debug(f"{task_embs=}")
+        # logger.debug(f"{task_embs=}")
         out[ds_name] = task_embs
     return out
 

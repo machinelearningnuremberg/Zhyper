@@ -45,6 +45,9 @@ def repeat_iterator(iterable):
 
 
 def get_layers(model):
+    # Unwrap DDP-wrapped models
+    if hasattr(model, "module"):
+        return get_layers(model.module)
     if hasattr(model, "model"):
         return get_layers(model.model)
     return model.layers

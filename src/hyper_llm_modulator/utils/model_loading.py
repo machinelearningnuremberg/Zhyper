@@ -24,6 +24,7 @@ def get_model_and_tokenizer(
     tokenizer_kwargs=None,
     device="cuda:0",
     dtype=torch.bfloat16,
+    peft_adapter_path=None
 ):
     model = get_model(
         model_path,
@@ -34,6 +35,7 @@ def get_model_and_tokenizer(
         model_kwargs,
         device,
         dtype,
+        peft_adapter_path
     )
     tokenizer = get_tokenizer(model_path, tokenizer_kwargs, peft_config, train)
     return model, tokenizer
@@ -81,6 +83,7 @@ def get_model(
     model_kwargs=None,
     device="cuda:0",
     dtype=torch.bfloat16,
+    peft_adapter_path=None
 ):
     model_init_kwargs = dict(
         pretrained_model_name_or_path=model_path,
@@ -97,7 +100,9 @@ def get_model(
         model_init_kwargs["use_cache"] = False
     logger.debug(f"Model init kwargs: {model_init_kwargs}")
     model = AutoModelForCausalLM.from_pretrained(**model_init_kwargs)
-    if peft_config is not None:
+    if peft_adapter_path is not None:
+        model = PeftModel.from_pretrained(model, peft_adapter_path)
+    elif peft_config is not None:
         model = PeftModel(model, peft_config)
     model.train(train)
     for param in model.parameters():

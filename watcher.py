@@ -31,7 +31,7 @@ class Watcher:
     def __init__(self, patterns):
         self.patterns = patterns
         self.files = self.get_files()
-        self.last_files = self.files
+        self.last_files = set()
 
     def get_files(self):
         return set(flatten(glob(pattern) for pattern in self.patterns))
@@ -51,7 +51,9 @@ class Watcher:
             return
         with open("watcher_state.yaml", "r") as f:
             state = yaml.safe_load(f)
-        self.last_files = state["last_files"]
+        if state is not None:
+            if state.get("last_files"):
+                self.last_files = state["last_files"]
 
 
 def get_sorted_checkpoints(adapter_dir):
@@ -100,8 +102,9 @@ def check_earlystop(adapter_dir, checkpoints, best_df_idx, best_checkpoint):
 if __name__ == "__main__":
     os.environ["WANDB_PROJECT"] = "hypermod_sft"
     wandb_dir = f"{os.environ['HOME']}/.wandb/logs/hypermod_sft/"
-    watcher = Watcher([HYPERLORA_CP_PATTERN, MTLORA_CP_PATTERN])
+    watcher = Watcher([HYPERLORA_CP_PATTERN, MTLORA_CP_PATTERN, HYPERLORA_CP_PATTERN_MODEL])
     watcher.load_state()
+    print(vars(watcher))
     print("Watching for new files...")
     while True:
         time.sleep(10)
@@ -128,12 +131,17 @@ if __name__ == "__main__":
             # init wandb run
             wandb.init(**wandb_kwargs)
             # eval
-            if "hypermod.pt" in file:
-                eval_hypermod_checkpoint(file, "cuda", curstep, full_eval=False)
+            if args.exp_setup == "z_hyper_lora":
+                if "hypermod.pt" in file:
+                    if "adapter_model.safetensors" in os.listdir(os.path.dirname(file)):
+                        eval_hypermod_checkpoint(file, os.path.dirname(file), "cuda", curstep, full_eval=False)
+            else:
+                if "hypermod.pt" in file:
+                    eval_hypermod_checkpoint(file, None, "cuda", curstep, full_eval=False)
 
-            elif "adapter_model.safetensors" in file:
-                lora_dir = os.path.dirname(file)
-                eval_lora(args, lora_dir, curstep, full_eval=False)
+                elif "adapter_model.safetensors" in file:
+                    lora_dir = os.path.dirname(file)
+                    eval_lora(args, lora_dir, curstep, full_eval=False)
 
             # get the best checkpoint
             checkpoints = get_sorted_checkpoints(adapter_dir)

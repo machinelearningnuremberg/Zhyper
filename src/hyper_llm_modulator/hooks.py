@@ -147,7 +147,7 @@ def add_last_layer_activation_hook(model, output_tensor):
     )
 
 
-def add_lora_hooks(model, module_names, layer_indices, A, B, scaling, input_dropout, training):
+def add_lora_hooks(model, module_names, layer_indices, A, B, Z, scaling, input_dropout, training):
     # A: [bs, in_features, r]
     # B: [bs, r, out_features]
     def lora_hook(module, args, output):
@@ -156,14 +156,45 @@ def add_lora_hooks(model, module_names, layer_indices, A, B, scaling, input_drop
         else:
             model_out = output
 
-        x = args[0].to(A.dtype)
+        # Ensure computations happen on the same device/dtype as the module input
+        device = args[0].device
+        x = args[0].to(dtype=A.dtype, device=device)
         bs, inp_len = x.shape[:2]
 
         # A and B repeat for each input token
-        lora_A = A.repeat_interleave(inp_len, dim=0)
-        lora_B = B.repeat_interleave(inp_len, dim=0)
-        x = x.reshape(bs * inp_len, 1, -1)
-        delta_x = torch.bmm(torch.bmm(F.dropout(x, input_dropout, training), lora_A), lora_B) * scaling
+        lora_A = A.repeat_interleave(inp_len, dim=0).to(device=device, dtype=x.dtype) # [bs, in, r] -> [bs * T , in, r]
+        lora_B = B.repeat_interleave(inp_len, dim=0).to(device=device, dtype=x.dtype) # [bs, r, o] -> [bs * T , r, o]
+        # print("lora_B.shape")
+        # print(lora_B.shape)
+        # print("x.shape before")
+        # print(x.shape)
+        x = x.reshape(bs * inp_len, 1, -1) # [bs, T, D] -> [bs * T, 1, D]
+        # print("mult")
+        if Z is not None:
+            # print("Z.shape")
+            # print(Z.shape)
+            # print("x.shape")
+            # print(x.shape)
+            lora_Z = Z.repeat_interleave(inp_len, dim=0).to(device=device, dtype=x.dtype) #[bs * T, r, r]
+            # print("lora_Z.shape")
+            # print(lora_Z.shape)
+            # print("lora_A.shape")
+            # print(lora_A.shape)
+            #[bs * T, 1, in] . [bs * T, in, r] -> [bs * T, 1, r]
+            xA = torch.bmm(F.dropout(x, input_dropout, training), lora_A)
+            # print("xA.shape")
+            # print(xA.shape)
+            #[bs * T, 1, r] . [bs * T, r, r] -> [bs * T, 1, r]
+            xAZ = torch.bmm(xA, lora_Z)
+            # print("xAZ.shape")
+            # print(xAZ.shape)
+            #[bs * T, 1, r] . [bs * T, r, o] -> [bs * T, 1, o]
+            scaling_tensor = torch.as_tensor(scaling, device=device, dtype=x.dtype)
+            delta_x = torch.bmm(xAZ, lora_B) * scaling_tensor
+            # print(delta_x.shape)
+        else:
+            scaling_tensor = torch.as_tensor(scaling, device=device, dtype=x.dtype)
+            delta_x = torch.bmm(torch.bmm(F.dropout(x, input_dropout, training), lora_A), lora_B) * scaling_tensor
 
         newoutput = model_out + delta_x.reshape(bs, inp_len, -1).to(model_out.dtype)
         if isinstance(output, tuple):
@@ -177,6 +208,69 @@ def add_lora_hooks(model, module_names, layer_indices, A, B, scaling, input_drop
         layer_indices,
         post_hook=lora_hook,
     )
+
+
+# def add_lora_hooks_old(model, module_names, layer_indices, A, B, Z, scaling, input_dropout, training):
+#     # A: [bs, in_features, r]
+#     # B: [bs, r, out_features]
+#     def lora_hook(module, args, output):
+#         if isinstance(output, tuple):
+#             model_out = output[0]
+#         else:
+#             model_out = output
+
+#         x = args[0].to(A.dtype)
+#         bs, inp_len = x.shape[:2]
+
+#         # A and B repeat for each input token
+#         lora_A = A.repeat_interleave(inp_len, dim=0) # [bs, in, r] -> [bs * T , in, r]
+#         lora_B = B.repeat_interleave(inp_len, dim=0) # [bs, r, o] -> [bs * T , r, o]
+#         # print("lora_B.shape")
+#         # print(lora_B.shape)
+#         # print("x.shape before")
+#         # print(x.shape)
+#         x = x.reshape(bs * inp_len, 1, -1) # [bs, T, D] -> [bs * T, 1, D]
+#         # print("mult")
+#         if Z is not None:
+#             # print("Z.shape")
+#             # print(Z.shape)
+#             # print("x.shape")
+#             # print(x.shape)
+#             lora_Z = Z.repeat_interleave(inp_len, dim=0) #[bs * T, r, r]
+#             # print("lora_Z.shape")
+#             # print(lora_Z.shape)
+#             # print("lora_A.shape")
+#             # print(lora_A.shape)
+#             #[bs * T, 1, in] . [bs * T, in, r] -> [bs * T, 1, r]
+#             xA = torch.bmm(F.dropout(x, input_dropout, training), lora_A)
+#             # print("xA.shape")
+#             # print(xA.shape)
+#             #[bs * T, 1, r] . [bs * T, r, r] -> [bs * T, 1, r]
+#             print("xA.device")
+#             print(xA.device)
+#             print("lora_Z.device")
+#             print(lora_Z.device)
+#             xAZ = torch.bmm(xA, lora_Z)
+#             # print("xAZ.shape")
+#             # print(xAZ.shape)
+#             #[bs * T, 1, r] . [bs * T, r, o] -> [bs * T, 1, o]
+#             delta_x = torch.bmm(xAZ, lora_B) * scaling
+#             # print(delta_x.shape)
+#         else:
+#             delta_x = torch.bmm(torch.bmm(F.dropout(x, input_dropout, training), lora_A), lora_B) * scaling
+
+#         newoutput = model_out + delta_x.reshape(bs, inp_len, -1).to(model_out.dtype)
+#         if isinstance(output, tuple):
+#             return (newoutput, *output[1:])
+#         else:
+#             return newoutput
+
+#     return apply_custom_hooks_at_layers_(
+#         model,
+#         module_names,
+#         layer_indices,
+#         post_hook=lora_hook,
+#     )
 
 
 def add_vera_hooks(model, module_names, layer_indices, A, B, d, b, scaling, input_dropout):

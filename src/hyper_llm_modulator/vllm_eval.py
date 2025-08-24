@@ -1,4 +1,5 @@
 import os
+import torch.multiprocessing as mp
 import datasets
 import logging
 from functools import partial
@@ -41,7 +42,6 @@ class LoRAVLLMModel(VLLMModel):
     def use_lora(self, lora_request: LoRARequest):
         self.llm.generate = partial(self.llm.generate, lora_request=lora_request)
 
-
 @torch.no_grad()
 def eval_model(
     model_dir,
@@ -52,6 +52,69 @@ def eval_model(
     prefill_text="",
     per_sample_lora=False,
 ):
+    # Ensure vLLM uses spawn to avoid CUDA re-init in forked subprocesses
+    # os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
+    # # os.environ["VLLM_LOGGING_LEVEL"] = "DEBUG"
+    # # os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+    # # os.environ["NCCL_DEBUG"] = "TRACE"
+    # # os.environ["VLLM_TRACE_FUNCTION"] = "1"
+    # try:
+    #     if mp.get_start_method(allow_none=True) != "spawn":
+    #         mp.set_start_method("spawn", force=True)
+    # except RuntimeError:
+    #     # start method already set; ignore
+    #     pass
+    # was_initialized = torch.distributed.is_initialized()
+    # if was_initialized:
+    #     logger.info("here")
+        # import multiprocessing as mp
+        # mp.set_start_method('spawn', force=True)
+        # p = mp.Process(target=_run_vllm, kwargs={"model_dir":model_dir, 
+        #                                         "lora_dirs":lora_dirs, 
+        #                                         "gpu_memory_utilization":gpu_memory_utilization,
+        #                                         "chat_template": chat_template,
+        #                                         "evaluator": evaluator})
+        # p.start()
+        # p.join()
+        # Get current process group info
+        # pg = torch.distributed.group.WORLD
+        # world_size = torch.distributed.get_world_size()
+        # rank = torch.distributed.get_rank()
+        
+        # # Temporarily destroy the process group
+        # torch.distributed.destroy_process_group()
+        # logger.info("Temporarily destroyed process group for vLLM evaluation")
+
+    # Determine tensor parallel size from visible GPUs
+    if os.environ.get("CUDA_VISIBLE_DEVICES"):
+        try:
+            _gpus = [g for g in os.environ["CUDA_VISIBLE_DEVICES"].split(",") if g != ""]
+            tp = max(1, len(_gpus))
+        except Exception:
+            tp = max(1, torch.cuda.device_count())
+    else:
+        tp = max(1, torch.cuda.device_count())
+    
+    logger.info(f"Creating vLLM LLM with tensor_parallel_size=1, gpu_memory_utilization={gpu_memory_utilization}")
+    logger.info(f"lora_dirs: {lora_dirs}, model_dir: {model_dir}")
+    # distributed_vars = ['RANK', 'WORLD_SIZE', 'LOCAL_RANK', 'MASTER_ADDR', 'MASTER_PORT', 'MASTER_PORT_RANGE']
+    # saved_env = {}
+    
+    # for var in distributed_vars:
+    #     if var in os.environ:
+    #         saved_env[var] = os.environ[var]
+    #         del os.environ[var]
+    # vllm.LLM(
+    #         model_dir,
+    #         seed=42,
+    #         max_model_len=2**12,
+    #         enable_lora=lora_dirs is not None,
+    #         max_lora_rank=64,  # current verson of vllm only supports up to 64
+    #         gpu_memory_utilization=gpu_memory_utilization,
+    #         tensor_parallel_size=4,
+    #         # distributed_executor_backend="torch"
+    #     )
+    # logger.info("after vllm.llm")
     kwargs = dict(
         llm=vllm.LLM(
             model_dir,
@@ -60,6 +123,9 @@ def eval_model(
             enable_lora=lora_dirs is not None,
             max_lora_rank=64,  # current verson of vllm only supports up to 64
             gpu_memory_utilization=gpu_memory_utilization,
+            tensor_parallel_size=1,        # disable multi-rank
+            pipeline_parallel_size=1,
+            # distributed_executor_backend="torch"
         ),
         sampling_params=vllm.SamplingParams(
             temperature=0,
@@ -70,26 +136,43 @@ def eval_model(
         chat_template=chat_template,
         prefill_text=prefill_text,
     )
+    logger.info("vLLM LLM created successfully")
     model = LoRAVLLMModel(**kwargs)
+    logger.info("LoRAVLLMModel created successfully")
     results = dict()
     if lora_dirs is not None:
         for i, lora_dir in enumerate(lora_dirs):
-            print(f"Evaluating lora at: {lora_dir}")
+            logger.info(f"Evaluating lora at: {lora_dir}")
             # NOTE: the second argument cannot be 0 or it will be treated as None
             # so painful trying to figure this out :(
             # also has to be unique
             lora_request = LoRARequest(f"lora_{i}", i + 1, lora_dir)
+            logger.info(f"Created LoRA request: {lora_request}")
             model.use_lora(lora_request)
+            logger.info(f"Applied LoRA to model")
             if per_sample_lora:
                 assert len(lora_dirs) == evaluator.num_samples, (
                     "Number of lora dirs must match number of samples when per_sample_lora is True"
                 )
+                logger.info(f"Starting per-sample evaluation with {len([i])} samples")
                 results[lora_dir] = evaluator.evaluate(model, [i])
+                logger.info(f"Per-sample evaluation completed")
             else:
+                logger.info(f"Starting batch evaluation")
                 results[lora_dir] = evaluator.evaluate(model)
+                logger.info(f"Batch evaluation completed")
     else:
-        print(f"Evaluating base model at: {model_dir}")
+        logger.info(f"Evaluating base model at: {model_dir}")
         results[model_dir] = evaluator.evaluate(model)
+    logger.info("All evaluations completed")
+
+    # if was_initialized:
+    #         torch.distributed.init_process_group(
+    #             backend="nccl",
+    #             world_size=world_size,
+    #             rank=rank
+    #         )
+    #         logger.info("Restored process group after vLLM evaluation")\
     return results
 
 

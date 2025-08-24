@@ -24,10 +24,11 @@ from hyper_llm_modulator.vllm_eval import eval
 logger = logging.getLogger()
 
 
-def eval_hypermod_checkpoint(checkpoint_path, device, curstep, full_eval, use_icl=False):
+def eval_hypermod_checkpoint(checkpoint_path, peft_adapter_path, device, curstep, full_eval, use_icl=False):
+    # peft_adapter_path in case of using z. Here we read the LORA weights and add it to the model.
     # load checkpoint
     args, hypermod, model, tokenizer, emb_model, emb_tokenizer, task_desc_format_fn, pooling_fn = (
-        load_hypermod_checkpoint(checkpoint_path, device)
+        load_hypermod_checkpoint(checkpoint_path, peft_adapter_path, device)
     )
     chat_template = tokenizer.chat_template
     layer_indices = torch.tensor(range(len(get_layers(model))), dtype=torch.long, device=device)
@@ -46,7 +47,12 @@ def eval_hypermod_checkpoint(checkpoint_path, device, curstep, full_eval, use_ic
             eval_ds_info.pop(ds)
 
     if args.use_one_hot_task_emb:
-        all_lora_dirs, save_dicts = generate_lora_for_tasks_one_hot(args, hypermod, layer_indices, save_dir, device)
+        all_lora_dirs, save_dicts = generate_lora_for_tasks_one_hot(args, 
+                                                                    hypermod, 
+                                                                    layer_indices, 
+                                                                    save_dir, 
+                                                                    device, 
+                                                                    model if peft_adapter_path is not None else None)
     else:
         all_lora_dirs, save_dicts = generate_loras_for_tasks_from_descs(
             args.model_dir,
@@ -62,6 +68,7 @@ def eval_hypermod_checkpoint(checkpoint_path, device, curstep, full_eval, use_ic
             task_desc_format_fn,
             pooling_fn,
             hypermod,
+            model if peft_adapter_path is not None else None
         )
     # run vllm eval on generated loras
     del hypermod, model, tokenizer, emb_model, emb_tokenizer, task_desc_format_fn, pooling_fn, layer_indices
@@ -119,6 +126,7 @@ def generate_lora_for_tasks_one_hot(
     layer_indices,
     save_dir,
     device,
+    model
 ):
     splits = ["train_descs", "other_train_descs", "random_descs"]
     all_lora_dirs = {eval_task: [] for eval_task in args.eval_ds_info}
@@ -153,7 +161,7 @@ def generate_lora_for_tasks_one_hot(
                     task_emb = task_emb.unsqueeze(0)
                     encoded_task_emb = hypermod.task_encoder(task_emb)["encoded_task_emb"].detach()
 
-                    lora_sd = hypermod.gen_lora(layer_indices, encoded_task_emb)
+                    lora_sd = hypermod.gen_lora(layer_indices, encoded_task_emb, model)
                     save_lora(lora_sd, hypermod.peft_config, lora_dir)
                     # if "Phi-3" in args.model_dir:
                     #     convert_qkv_gate_up_lora_to_splits_vllm(lora_dir)
@@ -175,6 +183,7 @@ def generate_loras_for_tasks_from_descs(
     task_desc_format_fn,
     pooling_fn,
     hypermod,
+    model
 ):
     _gen_and_save_lora = partial(
         gen_and_save_lora,
@@ -186,6 +195,7 @@ def generate_loras_for_tasks_from_descs(
         task_desc_format_fn=task_desc_format_fn,
         pooling_fn=pooling_fn,
         hypermod=hypermod,
+        model=model
     )
 
     ds_descs = {ds: train_metadata[ds]["descriptions"] for ds in train_metadata}
@@ -226,11 +236,12 @@ def gen_and_save_lora(
     hypermod,
     lora_dir,
     task_desc,
+    model
 ):
     task_emb = embed_texts([task_desc], emb_model, emb_tokenizer, task_desc_format_fn, pooling_fn, device)
     encoder_out = hypermod.task_encoder(task_emb)
     encoded_task_emb = encoder_out["encoded_task_emb"].detach()
-    lora_sd = hypermod.gen_lora(layer_indices, encoded_task_emb)
+    lora_sd = hypermod.gen_lora(layer_indices, encoded_task_emb, model)
     save_lora(lora_sd, hypermod.peft_config, lora_dir)
     hypermod.model_config.save_pretrained(lora_dir)
     if "Phi-3" in model_dir:

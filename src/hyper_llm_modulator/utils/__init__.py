@@ -27,7 +27,7 @@ from .preprocessing import (
 from .lora_formatting import (
     convert_qkv_gate_up_lora_to_splits_vllm,
     lora_state_dict_to_tensor_dict,
-    get_lora_module_names,
+    get_peft_module_names,
     save_lora_from_peft_model,
     get_target_lora_dirs,
     lora_tensor_dict_to_state_dict,
@@ -78,7 +78,7 @@ def compute_scaling_factor(peft_config):
 def create_logger(log_dir, debug=False):
     """Create a global logger that logs INFO level messages to stdout and DEBUG ones to debug.log"""
     os.makedirs(log_dir, exist_ok=True)
-    logger = logging.getLogger()
+    logger = logging.getLogger("")
     log_formatter = logging.Formatter(fmt="%(asctime)s %(levelname)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
     stream_level = logging.DEBUG if debug else logging.INFO
     stream_handler = logging.StreamHandler()

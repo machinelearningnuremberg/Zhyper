@@ -1,6 +1,6 @@
 # Zhyper: Factorized Hypernetworks for Conditioned LLM Fine-Tuning
 
-<h1 align="center">🛠️ Installation</h1>
+<h1 align="center">Installation</h1>
 
 Install `uv` if you don't have `uv` (see https://docs.astral.sh/uv/getting-started/installation/)
 
@@ -20,14 +20,7 @@ uv pip install src/fishfarm
 ```
 
 ---
-
----
-<h1 align="center">🏋️ Training</h1>
-<div align="center">
-    <img height="500px" src="assets/hyperlora_fig-1_medium.jpg" />
-</div>
-
-<h2 align="center">👩‍🏫 SFT Training</h2>
+<h2 align="center">SFT Training</h2>
 For asynchronous validation evaluation, we need a separate evaluator script.
 The `watcher.py` checks for new checkpoints and evaluates them as they get saved.
 The script also keeps track of which one is the best checkpoint so far.
@@ -45,10 +38,12 @@ Each takes around 5 days on a single H100 GPU for 20k epochs and 2 days for 2k e
 # Zhyper training
 ./scripts/train_diag_zhyper_mistral.sh
 ./scripts/train_square_zhyper_mistral.sh
+# For accelrate based training 
+./scripts/start_main.sh
 ```
 ---
 
-<h1 align="center">📊 Evaluation</h1>
+<h1 align="center"> Evaluation</h1>
 
 Base model
 ```bash

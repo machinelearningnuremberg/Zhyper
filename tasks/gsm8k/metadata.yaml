@@ -476,7 +476,7 @@ descriptions:
   \ as well."
 ds_kwargs:
   name: main
-  path: gsm8k
+  path: openai/gsm8k
   split: train
 response_field: answer
 system_message: ''

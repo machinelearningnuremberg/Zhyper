@@ -6,7 +6,7 @@ do
         --model_dir=$model \
         --lr=2.5e-5 \
         --warmup_frac=0.2 \
-        --n_tasks_per_batch=8 \
+        --n_ds_per_batch=8 \
         --n_points_per_task=1 \
         --grad_accum_steps=1 \
         --epochs=20000 \

@@ -16,7 +16,8 @@ generated_tasks/
 *outputs/
 plots/
 generated_tasks/
-watcher_state.yaml
+watcher_state*.yaml
 trained_t2l/
 downloaded_lora/
 *.zip
+*.out

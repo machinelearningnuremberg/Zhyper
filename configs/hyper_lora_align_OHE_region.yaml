@@ -1,0 +1,39 @@
+additional_eval_descs:
+  - dogs;cats;bananas;
+  - 7@9.qwepra#/.sd,s'2OC^039u#rdagjbL
+  - ggggggggggggggggggggg
+batch_size: 8
+train_ds_names:
+  - cul_Africa 
+  - cul_Asia
+  - cul_Europe
+  - cul_Latinamerica
+  - cul_MiddleEast
+epochs: 10
+eval_ds_info:
+  cul_Africa: None
+  cul_Asia: None
+  cul_Europe: None
+  cul_Latinamerica: None
+  cul_MiddleEast: None
+exp_setup: hyper_lora
+grad_accum_steps: 64 # ?
+logging_freq: 10%
+gen_freq: 10000000
+lr: 0.00001
+max_grad_norm: 1.0
+model_dir: models/Llama-3.1-8B-Instruct/
+neftune_noise_alpha: 5
+seed: 42
+skip_eval: false
+target_modules:
+  - q_proj
+  - v_proj
+sft_mode: completion
+use_one_hot_task_emb: true
+use_per_task_emb: true
+warmup_frac: 0.1
+use_hierarchical_sampler: true
+ds_type: align
+n_train_ds: 2
+n_ds_per_batch: 5 # number of datasets per batch

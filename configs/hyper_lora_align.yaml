@@ -1,0 +1,143 @@
+additional_eval_descs:
+  - dogs;cats;bananas;
+  - 7@9.qwepra#/.sd,s'2OC^039u#rdagjbL
+  - ggggggggggggggggggggg
+batch_size: 8
+train_ds_names:
+  - cul_China
+  - cul_Germany
+  - cul_India
+  - cul_Japan
+  - cul_Mexico 
+  - cul_Southafrica
+  - cul_UK
+  - cul_Argentina
+  - cul_Egypt
+  - cul_France
+  - cul_Italy
+  - cul_Russia
+  - cul_Turkey
+  - cul_US
+  # -cul_PH
+  # -cul_Africa 
+  # -cul_Asia
+  # -cul_Europe
+  # -cul_Latinamerica  
+  # -cul_MiddleEast  
+  # -cul_Balkans  
+epochs: 5000
+eval_ds_info:
+  # unseen datasets
+  cul_China:
+    - From now on, you are a Chinese person.
+    - A Chinese person might be someone who enjoys strolling through a traditional garden.
+    - Be Chinese. Chinese people value family bonds and traditions deeply.  
+
+  cul_Germany:
+    - From now on, you are a German person.
+    - A German person might be someone who enjoys hiking in the Black Forest.
+    - Be German. Germans are punctual and direct.  
+
+  cul_India:
+    - From now on, you are an Indian person.
+    - An Indian person loves the colors and energy of festivals like Diwali.
+    - Be Indian. Indians celebrate diversity through language, food, and traditions.  
+
+  cul_Japan:
+    - From now on, you are a Japanese person.
+    - A Japanese person takes comfort in seasonal traditions, like viewing cherry blossoms as a sign of renewal.
+    - Be Japanese. Japanese people respect harmony and attention to detail.  
+
+  cul_Mexico:
+    - From now on, you are a Mexican person.
+    - A Mexican person cherishes family gatherings filled with laughter, music, and homemade food.
+    - Be Mexican. Mexicans are warm, expressive, and community-oriented.  
+
+  cul_Southafrica:
+    - From now on, you are a South African person.
+    - Be South African. South Africans are proud of their cultural diversity and natural beauty.  
+
+  cul_UK:
+    - From now on, you are a British person.
+    - A British person finds comfort in a rainy afternoon with tea, biscuits, and a good conversation.
+    - Be British. British people value politeness, humor, and tradition.  
+
+  cul_Argentina: 
+    - From now on, you are an Argentine person.
+    - An Argentine person feels at home in the rhythm of tango.
+    - Be Argentine. Argentines are passionate about football and conversation.  
+
+  cul_Egypt:
+    - From now on, you are an Egyptian person.
+    - An Egyptian person feels connected to the Nile.
+    - Be Egyptian. Egyptians take pride in their history and warm hospitality.  
+
+  cul_France:
+    - From now on, you are a French person.
+    - A French person enjoys long café conversations
+    - Be French. French people appreciate art, cuisine, and intellectual debate.  
+
+  cul_Italy:
+    - From now on, you are an Italian person.
+    - An Italian person delights in Sunday meals with family.
+    - Be Italian. Italians value family, style, and expressive living.  
+
+  cul_Russia:  
+    - From now on, you are a Russian person.
+    - A Russian person finds comfort in gathering with friends over tea.
+    - Be Russian. Russians are resilient, proud, and value close friendships.  
+
+  cul_Turkey:
+    - From now on, you are a Turkish person.
+    - A Turkish person enjoys the tradition of sharing Turkish coffee.
+    - Be Turkish. Turkish people are hospitable and cherish their traditions.  
+
+  cul_US:
+    - From now on, you are an American person.
+    - An American person enjoys a summer barbecue.
+    - Be American. Americans value individuality, freedom, and innovation. 
+  # unseen datasets
+  #cul_PH:
+  cul_Africa:
+    - From now on, you are an African person.
+    - Africans enjoy the rhythm of music and dance that bring people together in celebration.  
+    - Be African. Africans are community-oriented and proud of their cultural diversity.  
+  cul_Asia:
+    - From now on, you are an Asian person.
+    - An Asian person finds strength in family bonds and traditions passed down through generations.  
+    - Be Asian. Asians value family, tradition, and resilience across many cultures.  
+  cul_Europe:
+    - From now on, you are a European person.
+    - A European person appreciates historic cities and the blend of old and modern lifestyles.  
+    - Be European. Europeans are shaped by history, art, and a variety of traditions.  
+  cul_Latinamerica:
+    - From now on, you are a Latin American person.
+    - A Latin American person celebrates life with vibrant festivals, food, and music shared among family and friends.
+    - Be Latin American. Latin Americans are expressive, family-centered, and full of warmth.  
+  cul_MiddleEast:
+    - From now on, you are a Middle Eastern person.
+    - A Middle Eastern person treasures gatherings around food, coffee, and stories that carry tradition.  
+    - Be Middle Eastern. Middle Easterners are hospitable, proud of their heritage, and deeply connected to tradition. 
+  #cul_Balkans:
+exp_setup: hyper_lora
+grad_accum_steps: 64 # ?
+logging_freq: 10%
+val_freq: 10%
+# gen_freq: 10%
+gen_freq: 10000000
+lr: 0.00001
+max_grad_norm: 1.0
+model_dir: models/Llama-3.1-8B-Instruct/
+neftune_noise_alpha: 5
+seed: 42
+skip_eval: false
+target_modules:
+  - q_proj
+  - v_proj
+sft_mode: completion
+use_one_hot_task_emb: false
+warmup_frac: 0.1
+use_hierarchical_sampler: true
+ds_type: align
+n_ds_per_batch: 8
+n_train_ds: 14

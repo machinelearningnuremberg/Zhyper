@@ -1,19 +1,21 @@
 batch_size: 8
+val_batch_size: 32
 train_ds_names:
-  - gsm8k
-epochs: 100
+  - cul_Germany
+epochs: 10
 eval_ds_info:
-  gsm8k:
+  cul_Germany:
     descriptions:
       - PLACEHOLDER
 exp_setup: lora
 grad_accum_steps: 1
 logging_freq: 10%
 val_freq: 10%
-gen_freq: 20%
+gen_freq: 10%
 lr: 0.00003
 max_grad_norm: 1.0
 model_dir: mistralai/Mistral-7B-Instruct-v0.2
+# model_dir: google/gemma-2-2b-it
 neftune_noise_alpha: 5
 seed: 42
 skip_eval: false
@@ -26,5 +28,5 @@ use_per_task_emb: false
 use_one_hot_task_emb: false
 warmup_frac: 0.1
 save_to_base_model_dir: false
-ds_type: task
+ds_type: align
 weight_decay: 0.1

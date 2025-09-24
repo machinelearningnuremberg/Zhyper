@@ -2,7 +2,7 @@ additional_eval_descs:
   - dogs;cats;bananas;
   - 7@9.qwepra#/.sd,s'2OC^039u#rdagjbL
   - ggggggggggggggggggggg
-batch_size: 4
+batch_size: 8
 train_ds_names:
   - lol_742
   - lol_1198
@@ -654,7 +654,9 @@ eval_ds_info:
       - Here, you'll be presented with different statements, and your role is to decide which one appropriately complements or responds to a scenario. This process involves critical analysis and synthesis of information.
 exp_setup: hyper_lora
 grad_accum_steps: 64 # ?
-logging_freq: 100
+logging_freq: 10%
+val_freq: 10%
+gen_freq: 10%
 lr: 0.00001
 max_grad_norm: 1.0
 model_dir: models/Llama-3.1-8B-Instruct/
@@ -668,3 +670,4 @@ sft_mode: completion
 use_one_hot_task_emb: false
 warmup_frac: 0.1
 use_hierarchical_sampler: true
+ds_type: task

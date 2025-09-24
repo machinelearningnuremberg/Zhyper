@@ -1,4 +1,5 @@
 import os
+import gc
 import torch.multiprocessing as mp
 import datasets
 import logging
@@ -17,6 +18,7 @@ from fishfarm.tasks.language_restricted_math import (
     MathSample,
     extract_answer_number,
 )
+from vllm.distributed.parallel_state import destroy_model_parallel, destroy_distributed_environment
 from fishfarm.tasks.evalplus import EvalplusTask, load_dataset
 from fishfarm.tasks.rouge import RougeSample, RougeScorerConfig, RougeTask
 
@@ -27,7 +29,7 @@ from hyper_llm_modulator.utils.eval_prompts import (
 )
 from hyper_llm_modulator.utils import get_preprocessing_fn
 
-logger = logging.getLogger()
+logger = logging.getLogger("")
 
 
 class LoRAVLLMModel(VLLMModel):
@@ -52,69 +54,7 @@ def eval_model(
     prefill_text="",
     per_sample_lora=False,
 ):
-    # Ensure vLLM uses spawn to avoid CUDA re-init in forked subprocesses
-    # os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
-    # # os.environ["VLLM_LOGGING_LEVEL"] = "DEBUG"
-    # # os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-    # # os.environ["NCCL_DEBUG"] = "TRACE"
-    # # os.environ["VLLM_TRACE_FUNCTION"] = "1"
-    # try:
-    #     if mp.get_start_method(allow_none=True) != "spawn":
-    #         mp.set_start_method("spawn", force=True)
-    # except RuntimeError:
-    #     # start method already set; ignore
-    #     pass
-    # was_initialized = torch.distributed.is_initialized()
-    # if was_initialized:
-    #     logger.info("here")
-        # import multiprocessing as mp
-        # mp.set_start_method('spawn', force=True)
-        # p = mp.Process(target=_run_vllm, kwargs={"model_dir":model_dir, 
-        #                                         "lora_dirs":lora_dirs, 
-        #                                         "gpu_memory_utilization":gpu_memory_utilization,
-        #                                         "chat_template": chat_template,
-        #                                         "evaluator": evaluator})
-        # p.start()
-        # p.join()
-        # Get current process group info
-        # pg = torch.distributed.group.WORLD
-        # world_size = torch.distributed.get_world_size()
-        # rank = torch.distributed.get_rank()
-        
-        # # Temporarily destroy the process group
-        # torch.distributed.destroy_process_group()
-        # logger.info("Temporarily destroyed process group for vLLM evaluation")
-
-    # Determine tensor parallel size from visible GPUs
-    if os.environ.get("CUDA_VISIBLE_DEVICES"):
-        try:
-            _gpus = [g for g in os.environ["CUDA_VISIBLE_DEVICES"].split(",") if g != ""]
-            tp = max(1, len(_gpus))
-        except Exception:
-            tp = max(1, torch.cuda.device_count())
-    else:
-        tp = max(1, torch.cuda.device_count())
-    
-    logger.info(f"Creating vLLM LLM with tensor_parallel_size=1, gpu_memory_utilization={gpu_memory_utilization}")
     logger.info(f"lora_dirs: {lora_dirs}, model_dir: {model_dir}")
-    # distributed_vars = ['RANK', 'WORLD_SIZE', 'LOCAL_RANK', 'MASTER_ADDR', 'MASTER_PORT', 'MASTER_PORT_RANGE']
-    # saved_env = {}
-    
-    # for var in distributed_vars:
-    #     if var in os.environ:
-    #         saved_env[var] = os.environ[var]
-    #         del os.environ[var]
-    # vllm.LLM(
-    #         model_dir,
-    #         seed=42,
-    #         max_model_len=2**12,
-    #         enable_lora=lora_dirs is not None,
-    #         max_lora_rank=64,  # current verson of vllm only supports up to 64
-    #         gpu_memory_utilization=gpu_memory_utilization,
-    #         tensor_parallel_size=4,
-    #         # distributed_executor_backend="torch"
-    #     )
-    # logger.info("after vllm.llm")
     kwargs = dict(
         llm=vllm.LLM(
             model_dir,
@@ -123,9 +63,8 @@ def eval_model(
             enable_lora=lora_dirs is not None,
             max_lora_rank=64,  # current verson of vllm only supports up to 64
             gpu_memory_utilization=gpu_memory_utilization,
-            tensor_parallel_size=1,        # disable multi-rank
-            pipeline_parallel_size=1,
-            # distributed_executor_backend="torch"
+            tensor_parallel_size=1,
+            pipeline_parallel_size=1
         ),
         sampling_params=vllm.SamplingParams(
             temperature=0,
@@ -165,14 +104,6 @@ def eval_model(
         logger.info(f"Evaluating base model at: {model_dir}")
         results[model_dir] = evaluator.evaluate(model)
     logger.info("All evaluations completed")
-
-    # if was_initialized:
-    #         torch.distributed.init_process_group(
-    #             backend="nccl",
-    #             world_size=world_size,
-    #             rank=rank
-    #         )
-    #         logger.info("Restored process group after vLLM evaluation")\
     return results
 
 
@@ -391,6 +322,21 @@ FIQA_TEMPLATE = (
 
 BOOLQ_SYSTEM_MESSAGE = ""
 BOOLQ_TEMPLATE = "{passage}\n\nQuestion: {question}?\n\nPlease answer with either `true` or `false` without any explanation."
+
+
+MBPP_TEMPLATE = ("Solve the following python programming problem.\n\n\n"
+  "{prompt}\n\n\n"
+  "Your code should satisfy the following assertions:\n\n"
+  "```python\n\n"
+  "{assertions}\n\n"
+  "```")
+
+
+HUMANEVAL_TEMPLATE = ("Write a solution to the following problem:\n\n"
+  "```python\n\n"
+  "{prompt}\n\n"
+  "```")
+
 LOL_TEMPLATE = "{task_def}\n\n{problem}"
 
 TASK_TEMPLATES = {

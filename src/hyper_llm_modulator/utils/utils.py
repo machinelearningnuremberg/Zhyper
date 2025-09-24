@@ -6,7 +6,7 @@ import torch
 from tqdm import tqdm
 import wandb
 
-logger = logging.getLogger()
+logger = logging.getLogger("")
 
 
 def embed_texts(texts, emb_model, emb_tokenizer, task_desc_format_fn, pooling_fn, device, batch_size=None):

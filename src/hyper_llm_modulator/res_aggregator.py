@@ -7,6 +7,7 @@ import json
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import wandb
 
 SAVE_DIR_RECON = "train_outputs/recon/hyper_lora"
 SAVE_DIR_SFT = "train_outputs/sft/hyper_lora"
@@ -116,6 +117,9 @@ def get_eval_results(hypermod_dir, hypermod_name, base_model_dir, mt_lora_dir, t
         out_tasks.append(task)
         df["model_name"] = hypermod_name if hypermod_name else "hyper_lora"
         df.rename(columns={metric: f"{task}.{metric}"}, inplace=True)
+        # Ensure a split column exists (non hyper evals may not include it)
+        if "split" not in df.columns:
+            df["split"] = "eval_descs"
         df = df.groupby(["model_name", "split"])[f"{task}.{metric}"].mean()
 
         ref_perf = get_ref_perf(base_model_dir, task, metric)
@@ -158,15 +162,23 @@ def aggregrate_results_and_save_to_file(hypermod_dir, hypermod_name, base_model_
     )
 
     for task_list in [tasks["train"]["rouge"], tasks["eval"]["rouge"]]:
-        dfs.append(_get_eval_results(tasks=task_list, metric="results.rougeL_fmeasure"))
+        _df = _get_eval_results(tasks=task_list, metric="results.rougeL_fmeasure")
+        if _df is not None:
+            dfs.append(_df)
 
     for task_list in [tasks["train"]["acc"], tasks["eval"]["acc"]]:
-        dfs.append(_get_eval_results(tasks=task_list, metric="results.acc"))
+        _df = _get_eval_results(tasks=task_list, metric="results.acc")
+        if _df is not None:
+            dfs.append(_df)
 
     if "humaneval" in tasks["eval"]["acc"] or "humaneval" in tasks["train"]["acc"]:
-        dfs.append(_get_eval_results(tasks=["humaneval"], metric="results.humaneval_base_pass@1"))
+        _df = _get_eval_results(tasks=["humaneval"], metric="results.humaneval_base_pass@1")
+        if _df is not None:
+            dfs.append(_df)
     if "mbpp" in tasks["eval"]["acc"] or "mbpp" in tasks["train"]["acc"]:
-        dfs.append(_get_eval_results(tasks=["mbpp"], metric="results.mbpp_base_pass@1"))
+        _df = _get_eval_results(tasks=["mbpp"], metric="results.mbpp_base_pass@1")
+        if _df is not None:
+            dfs.append(_df)
 
     combined_df = pd.concat(dfs, axis=1)
     benchmark_task_cols = [

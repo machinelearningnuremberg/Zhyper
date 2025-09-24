@@ -68,6 +68,10 @@ def get_preprocessing_fn(ds_name):
             query = random.sample(SUM_Q, 1)[0]
             return dict(context=context, query=query, answer=example["summary_text"])
 
+    if ds_name.startswith("cul_"):
+        def f(example):
+            return dict(question=example["submission_title"], answer=example["comment_body"])
+
     return f
 
 
@@ -145,5 +149,5 @@ def get_prompt_formatting_fn(
                 output_texts["prompt"].append(prompt)
                 output_texts["response"].append(response)
         return output_texts
-
+        
     return f if not is_intx_model else f_intx

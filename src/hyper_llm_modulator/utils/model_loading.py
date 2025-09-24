@@ -11,7 +11,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, AutoModel
 from hyper_llm_modulator.utils.pooling import get_pooling_fn
 from hyper_llm_modulator.utils.preprocessing import add_full_stop, apply_sfr_template
 
-logger = logging.getLogger()
+logger = logging.getLogger("")
 
 
 def get_model_and_tokenizer(
@@ -24,7 +24,8 @@ def get_model_and_tokenizer(
     tokenizer_kwargs=None,
     device="cuda:0",
     dtype=torch.bfloat16,
-    peft_adapter_path=None
+    peft_adapter_path=None,
+    exp_setup=None
 ):
     model = get_model(
         model_path,
@@ -35,7 +36,8 @@ def get_model_and_tokenizer(
         model_kwargs,
         device,
         dtype,
-        peft_adapter_path
+        peft_adapter_path,
+        exp_setup
     )
     tokenizer = get_tokenizer(model_path, tokenizer_kwargs, peft_config, train)
     return model, tokenizer
@@ -83,7 +85,8 @@ def get_model(
     model_kwargs=None,
     device="cuda:0",
     dtype=torch.bfloat16,
-    peft_adapter_path=None
+    peft_adapter_path=None,
+    exp_setup=None
 ):
     model_init_kwargs = dict(
         pretrained_model_name_or_path=model_path,
@@ -115,7 +118,7 @@ def get_peft_config(model_dir, peft_type, **kwargs):
     assert peft_type in [PeftType.LORA, PeftType.VERA]
 
     peft_conf_kwargs = dict(
-        r=8 if peft_type == PeftType.LORA else 64,
+        r=8 if peft_type == PeftType.LORA else 8,
         peft_type=peft_type,
         base_model_name_or_path=model_dir,
         task_type="CAUSAL_LM",

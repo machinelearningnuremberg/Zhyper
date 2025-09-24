@@ -211,7 +211,7 @@ def get_target_lora_dirs(datasets, base_model_dir):
     return out
 
 
-def get_lora_module_names(model, target_modules, layer_indices):
+def get_peft_module_names(model, target_modules, layer_indices):
     module_names = {
         target_module: [[] for _ in range(len(layer_indices))]
         for target_module in target_modules
@@ -223,13 +223,84 @@ def get_lora_module_names(model, target_modules, layer_indices):
         if layer_idx in layer_indices:
             for target_module in target_modules:
                 if target_module in k:
-                    if "vera_lambda" in k:
-                        # replace the name to match the lora naming convention
-                        k = k.replace("vera_lambda_d", "lora_A.weight")
-                        k = k.replace("vera_lambda_b", "lora_B.weight")
+                    # if "vera_lambda" in k:
+                    #     # replace the name to match the lora naming convention
+                    #     k = k.replace("vera_lambda_d", "lora_A.weight")
+                    #     k = k.replace("vera_lambda_b", "lora_B.weight")
                     module_names[target_module][layer_idx].append(k)
                     break
     return module_names
+
+
+def convert_vera_to_lora(adapter_folder_path: str) -> None:
+    """Convert VeRA adapter tensor keys to standard LoRA naming for vLLM.
+
+    - Renames *.vera_lambda_d -> *.lora_A.weight
+      and   *.vera_lambda_b -> *.lora_B.weight
+    - Updates adapter_config.json peft_type to "LORA" if present
+    - Ensures lora_alpha exists (defaults to 1) to satisfy loaders
+
+    No-op if no VeRA keys are found.
+    """
+    adapter_bin_name = "adapter_model.safetensors"
+    adapter_config_name = "adapter_config.json"
+    adapter_bin_path = f"{adapter_folder_path}/{adapter_bin_name}"
+    adapter_cfg_path = f"{adapter_folder_path}/{adapter_config_name}"
+
+    if not (os.path.exists(adapter_bin_path) and os.path.exists(adapter_cfg_path)):
+        return
+
+    tensors = load_file(adapter_bin_path)
+    has_vera = any(("vera_lambda_d" in k) or ("vera_lambda_b" in k) for k in tensors.keys())
+    if not has_vera:
+        return
+
+    converted = {}
+    vera_A = tensors.get("base_model.vera_A")
+    vera_B = tensors.get("base_model.vera_B")
+
+    for k, v in tensors.items():
+        # Skip raw VeRA base matrices if we can materialize LoRA weights
+        if k in ("base_model.vera_A", "base_model.vera_B"):
+            continue
+        if "vera_lambda_d" in k and vera_A is not None:
+            # lora_A.weight = diag(lambda_d) @ A  -> broadcast as lambda_d[:, None] * A
+            lambda_d = v
+            lora_A = lambda_d.view(-1, 1) * vera_A
+            new_k = k.replace("vera_lambda_d", "lora_A.weight")
+            converted[new_k] = lora_A
+        elif "vera_lambda_b" in k and vera_B is not None:
+            # lora_B.weight = diag(lambda_b) @ B  -> broadcast as lambda_b[:, None] * B
+            lambda_b = v
+            # Match out-dim rows with lambda_b length if needed
+            B = vera_B
+            if B.shape[0] != lambda_b.shape[0]:
+                B = B[: lambda_b.shape[0], :]
+            lora_B = lambda_b.view(-1, 1) * B
+            new_k = k.replace("vera_lambda_b", "lora_B.weight")
+            converted[new_k] = lora_B
+        elif ("vera_lambda_d" in k or "vera_lambda_b" in k) and (
+            vera_A is None or vera_B is None
+        ):
+            # Fallback: rename only if base matrices missing (non-ideal)
+            new_k = (
+                k.replace("vera_lambda_d", "lora_A.weight")
+                .replace("vera_lambda_b", "lora_B.weight")
+            )
+            converted[new_k] = v
+        else:
+            converted[k] = v
+
+    with open(adapter_cfg_path, "r") as f:
+        cfg = json.load(f)
+    # Normalize peft_type and minimal fields expected by vLLM
+    if "peft_type" in cfg and cfg["peft_type"].upper() != "LORA":
+        cfg["peft_type"] = "LORA"
+    cfg.setdefault("lora_alpha", 1)
+    # Write back
+    save_file(converted, adapter_bin_path, metadata={"format": "pt"})
+    with open(adapter_cfg_path, "w") as f:
+        json.dump(cfg, f, indent=4)
 
 
 def save_lora_from_peft_model(model, model_dir, save_dir):

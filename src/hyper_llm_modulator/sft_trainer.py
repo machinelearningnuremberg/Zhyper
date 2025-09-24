@@ -8,6 +8,8 @@ import shutil
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+import re
+from accelerate.utils import broadcast
 
 import torch
 import wandb
@@ -16,11 +18,12 @@ from transformers.modeling_utils import unwrap_model
 
 from hyper_llm_modulator.hooks import add_lora_hooks, remove_hook_handles_
 from hyper_llm_modulator.hyper_modulator import get_init_peft_weights, get_peft_weights, save_hypermod_checkpoint
-from hyper_llm_modulator.utils import save_lora_from_peft_model, log_scalar
+from hyper_llm_modulator.utils import save_lora_from_peft_model, log_scalar, get_num_params
+import subprocess
 
-from hyper_llm_modulator.utils.eval_hypermod import eval_hypermod_checkpoint, eval_lora
+# from hyper_llm_modulator.utils.eval_hypermod import eval_lora
 
-logger = logging.getLogger()
+logger = logging.getLogger("")
 
 MODEL_INPUT_KEYS = ["input_ids", "attention_mask"]
 
@@ -142,14 +145,9 @@ def get_loss_batch(
             training=model.training,
         )
         if l2_reg_generated_w:
-            if "z" in hypermod.exp_setup:
-                # Z is a square matrix [bs, r, r] for each target module
-                for Z in factorized_delta_w.values():
-                    out["generated_w_l2_loss"] += (Z**2).mean() * l2_reg_generated_w
-            else:
-                # Original A/B regularization
-                for A, B in factorized_delta_w.values():
-                    out["generated_w_l2_loss"] += ((A**2).mean() + (B**2).mean()) * l2_reg_generated_w
+            # Original A/B regularization
+            for A, B in factorized_delta_w.values():
+                out["generated_w_l2_loss"] += ((A**2).mean() + (B**2).mean()) * l2_reg_generated_w
     outputs = model(**{k: batch[k] for k in MODEL_INPUT_KEYS})
     out["sft_loss"] = compute_loss(
         batch["labels"],
@@ -172,6 +170,30 @@ def get_loss_batch(
     return out
 
 
+def log_num_train_params(model):
+    logger.debug("Trainable model parameters:")
+    for name, p in model.named_parameters():
+        if p.requires_grad:
+            logger.debug(f"{name}, dtype:{p.dtype}")
+
+    num_total_params, num_trainable_params = get_num_params(model)
+    logger.info(
+        f"trainable params: {num_trainable_params:,d} "
+        f"|| all params: {num_total_params:,d} "
+        f"|| trainable%: {100 * num_trainable_params / num_total_params:.4f}"
+    )
+
+def _get_percentage_value(s: str):
+    if not isinstance(s, str):
+        return None
+    
+    pattern = re.compile(r"^\s*(\d+(\.\d+)?)%\s*$")
+    match = pattern.match(s)
+    if match:
+        return float(match.group(1)) / 100
+    return None
+
+
 def train(
     args,
     save_dir,
@@ -185,12 +207,16 @@ def train(
     optimizer,
     num_training_steps,
     scheduler,
+    tokenizer
 ):
+
+    torch.autograd.set_detect_anomaly(True)
     model.train()
     if args.use_hypernet:
         hypermod.train()
         if accelerator.is_main_process:
             wandb.watch(hypermod, log="all", log_freq=1000)
+    log_num_train_params(model)
 
     _log_train_vals = partial(
         log_train_vals,
@@ -217,6 +243,9 @@ def train(
 
     neftune_hook_handle = trl_activate_neftune(model, args.neftune_noise_alpha)
 
+    ##########################################
+    # Training
+    ##########################################
     # validate before training
     if args.also_val_on_train:
         val_info = validate(model, hypermod, {"train": train_dataloader}, _get_loss_batch, curstep=0)
@@ -225,23 +254,46 @@ def train(
         cp_path = save_hypermod_checkpoint(save_dir, hypermod, curstep=0, accelerator=accelerator)
         if "z" in args.exp_setup:
             lora_dir = save_lora_checkpoint(save_dir, accelerator.unwrap_model(model), args.model_dir, curstep=0, accelerator=accelerator)
-    elif "mt_lora" in args.exp_setup:
+    elif ("mt_lora" in args.exp_setup) or ("mt_vera" in args.exp_setup):
         lora_dir = save_lora_checkpoint(save_dir, accelerator.unwrap_model(model), args.model_dir, curstep=0, accelerator=accelerator)
     elif "val/seen" in val_info:
         # normal LoRA training
         stopper = EarlyStopper(patience=3, min_delta=0)
         stopper.early_stop(val_info["val/seen"]["sft_loss"])
 
+    # if accelerator.is_main_process:
+    #     if os.environ.get("SLURM_JOB_ID", None) is not None:
+    #         # here we run the watcher on demand when on slurm to save resources.
+    #         sbatch_res = subprocess.run(["sbatch", "scripts/watcher.sh", "false", "true"], capture_output=True, text=True)
+    #         logging.info(sbatch_res)
+
+
     curstep = 1
     grad_norm = 0
     avg_losses = defaultdict(list)
     early_stop = False
+
+    pct_gen_freq = _get_percentage_value(args.gen_freq)
+    if pct_gen_freq is not None:
+        gen_freq = max(1, int(num_training_steps * pct_gen_freq))
+    else:
+        gen_freq = int(args.gen_freq)
+    pct_logging_freq = _get_percentage_value(args.logging_freq)
+    if pct_logging_freq is not None:
+        logging_freq = max(1, int(num_training_steps * pct_logging_freq))
+    else:
+        logging_freq = int(args.logging_freq)
+
+    pct_val_freq = _get_percentage_value(args.val_freq)
+    if pct_val_freq is not None:
+        val_freq = max(1, int(num_training_steps * pct_val_freq))
+    else:
+        val_freq = int(args.val_freq)
+    
     for _ in (pbar := tqdm(range(args.epochs), total=num_training_steps)):
         for batch in train_dataloader:
-            ##########################################
-            # Training
-            ##########################################
             with accelerator.accumulate(model), accelerator.autocast():
+                # print(tokenizer.decode(batch["input_ids"][0], skip_special_tokens=False))
                 batch_loss = _get_loss_batch_train(batch)
                 loss = batch_loss["sft_loss"] + batch_loss["generated_w_l2_loss"]
                 avg_losses["train/sft_loss"].append(batch_loss["sft_loss"].item())
@@ -257,41 +309,106 @@ def train(
 
             pbar.update(1)
             pbar.set_description(f"loss: {loss.item():.4f}")
-
             ##########################################
             # Logging and Validation
             ##########################################
-            if (curstep % args.logging_freq == 0) or (curstep == num_training_steps):
+            if (curstep % gen_freq == 0) or (curstep == num_training_steps):
+                bs = batch["input_ids"].shape[0]
+                num_show = 5 if bs >= 5 else bs
+                sample_indices = torch.randperm(bs)[:num_show].tolist()
+                for i in sample_indices:
+                    ids = batch["input_ids"][i]
+                    labels = batch["labels"][i]
+                    # prompt tokens are where labels == -100
+                    prompt_ids = ids[labels == -100]
+                    prompt_ids = prompt_ids[prompt_ids != tokenizer.pad_token_id]
+                    tokenizer.padding_side = "left"
+                    # hacky way to get the template from the ids.
+                    if "Mistral" in tokenizer.name_or_path:
+                        prompt_ids = torch.cat([prompt_ids, tokenizer.encode(" ", add_special_tokens=False, return_tensors="pt").squeeze(0).to(prompt_ids.device)])
+                    else:
+                        messages = [
+                            {"role": "system", "content": "You are a helpful assistant."},
+                            {"role": "user", "content": "Tell me"},
+                        ]
+
+                        ids_with_prompt = tokenizer.apply_chat_template(
+                            messages, add_generation_prompt=True, tokenize=True
+                        )
+                        ids_without_prompt = tokenizer.apply_chat_template(
+                            messages, add_generation_prompt=False, tokenize=True
+                        )
+                        gen_marker_ids = ids_with_prompt[len(ids_without_prompt):]
+                        prompt_ids = torch.cat([
+                            prompt_ids,
+                            torch.tensor(gen_marker_ids, dtype=prompt_ids.dtype, device=prompt_ids.device)
+                        ])
+                    with torch.no_grad(), evaluating(model):
+                        unwrapped = accelerator.unwrap_model(model)
+                        original_use_cache = getattr(unwrapped.config, "use_cache", None)
+                        if original_use_cache is not True:
+                            try:
+                                unwrapped.config.use_cache = True
+                            except Exception:
+                                pass
+                        input_ids = prompt_ids.unsqueeze(0)
+                        attention_mask = torch.ones_like(input_ids)
+                        outputs = unwrapped.generate(
+                            input_ids=input_ids,
+                            attention_mask=attention_mask,
+                            max_new_tokens=256,
+                            do_sample=True,
+                            # temperature=1.0,
+                            # top_p=1.0,
+                            eos_token_id=tokenizer.eos_token_id,
+                            pad_token_id=tokenizer.pad_token_id
+                        )
+                        if original_use_cache is not None and original_use_cache is not True:
+                            try:
+                                unwrapped.config.use_cache = original_use_cache
+                            except Exception:
+                                pass
+                    logging.info(tokenizer.decode(outputs[0], skip_special_tokens=True))
+                tokenizer.padding_side = "right"
+            if (curstep % logging_freq == 0) or (curstep == num_training_steps):
                 _log_train_vals(grad_norm, avg_losses, curstep)
                 # reset avg_losses
                 avg_losses = defaultdict(list)
-
-            if (curstep % args.val_freq == 0) or (curstep == num_training_steps):
+            if (curstep % val_freq == 0) or (curstep == num_training_steps):
                 if args.also_val_on_train:
                     val_info = validate(model, hypermod, {"train": train_dataloader}, _get_loss_batch, curstep)
-
                 val_info = validate(model, hypermod, val_dataloaders, _get_loss_batch, curstep)
                 if args.use_hypernet:
                     cp_path = save_hypermod_checkpoint(save_dir, hypermod, curstep, accelerator)
                     if "z" in args.exp_setup:
                         lora_dir = save_lora_checkpoint(save_dir, accelerator.unwrap_model(model), args.model_dir, curstep, accelerator)
-                elif "mt_lora" in args.exp_setup:
+                elif ("mt_lora" in args.exp_setup) or ("mt_vera" in args.exp_setup):
                     lora_dir = save_lora_checkpoint(save_dir, accelerator.unwrap_model(model), args.model_dir, curstep, accelerator)
                 elif "val/seen" in val_info:
-                    if stopper.early_stop(val_info["val/seen"]["sft_loss"]):
-                        logger.info("Early stopping")
-                        early_stop = True
-                        break
+                    # Compute early stop on main process, but ALL ranks must call broadcast
+                    should_stop_main = False
+                    if accelerator.is_main_process:
+                        if stopper.early_stop(val_info["val/seen"]["sft_loss"]):
+                            logger.info("Early stopping")
+                            should_stop_main = True
+                    stop_signal = torch.tensor(int(should_stop_main), device=accelerator.device)
+                    stop_signal = broadcast(stop_signal, from_process=0)
+                    early_stop = bool(stop_signal.item())
 
                 # read early stop signal from the watcher
-                if os.path.isfile(f"{save_dir}/earlystop_info.yaml"):
+                has_earlystop_file_main = False
+                if accelerator.is_main_process:
+                    has_earlystop_file_main = os.path.isfile(f"{save_dir}/earlystop_info.yaml")
+                stop_signal = torch.tensor(int(has_earlystop_file_main), device=accelerator.device)
+                stop_signal = broadcast(stop_signal, from_process=0)
+                if bool(stop_signal.item()):
                     early_stop = True
-                    break
 
             curstep += 1
+            if early_stop:
+                break
         if early_stop:
             break
-
     # accelerator.wait_for_everyone()
     if args.use_hypernet:
         last_cp_path_hypermod = save_hypermod_checkpoint(save_dir, hypermod, curstep, accelerator)
@@ -299,12 +416,7 @@ def train(
             best_cp_path_hypermod = f"{save_dir}/hypermod.pt"
             if not os.path.isfile(best_cp_path_hypermod):
                 shutil.copy(last_cp_path_hypermod, f"{save_dir}/hypermod.pt")
-        peft_adapter_path = None
         if "z" in args.exp_setup:
-            peft_adapter_path = save_dir
-            # peft_model = accelerator.unwrap_model(model)
-            # state_dict = accelerator.get_state_dict(model)
-            # if accelerator.is_main_process:
             lora_dir = save_lora_checkpoint(save_dir, accelerator.unwrap_model(model), args.model_dir, curstep, accelerator)
             if accelerator.is_main_process:
                 shutil.copy(f"{lora_dir}/adapter_model.safetensors", f"{save_dir}/adapter_model.safetensors")
@@ -319,25 +431,33 @@ def train(
         # if accelerator.is_main_process:
         # TODO: maybe fix or remove and only rely on watcher.
         #     eval_hypermod_checkpoint(best_cp_path_hypermod, peft_adapter_path, accelerator.device, curstep, full_eval=True)
-    elif "mt_lora" in args.exp_setup:
-        lora_dir = save_lora_checkpoint(save_dir, model, args.model_dir, curstep, accelerator)
-        if not os.path.isfile(f"{save_dir}/adapter_model.safetensors"):
-            shutil.copy(f"{lora_dir}/adapter_model.safetensors", f"{save_dir}/adapter_model.safetensors")
-        if not os.path.isfile(f"{save_dir}/config.json"):
-            shutil.copy(f"{lora_dir}/config.json", f"{save_dir}/config.json")
-        eval_lora(args, save_dir, curstep, full_eval=True)
+    elif ("mt_lora" in args.exp_setup) or ("mt_vera" in args.exp_setup):
+        lora_dir = save_lora_checkpoint(save_dir, accelerator.unwrap_model(model), args.model_dir, curstep, accelerator)
+        if accelerator.is_main_process:
+            if not os.path.isfile(f"{save_dir}/adapter_model.safetensors"):
+                shutil.copy(f"{lora_dir}/adapter_model.safetensors", f"{save_dir}/adapter_model.safetensors")
+            if not os.path.isfile(f"{save_dir}/config.json"):
+                shutil.copy(f"{lora_dir}/config.json", f"{save_dir}/config.json")
+        #eval_lora(args, save_dir, curstep, full_eval=True)
     elif "mt_fullfinetune" in args.exp_setup:
-        model.save_pretrained(save_dir)
+        if accelerator.is_main_process:
+            accelerator.unwrap_model(model).save_pretrained(save_dir)
+        accelerator.wait_for_everyone()
     else:
-        lora_dir = save_lora_checkpoint(save_dir, model, args.model_dir, curstep, accelerator)
-        shutil.copy(f"{lora_dir}/adapter_model.safetensors", f"{save_dir}/adapter_model.safetensors")
-        eval_lora(args, save_dir, curstep, full_eval=True)
+        lora_dir = save_lora_checkpoint(save_dir, accelerator.unwrap_model(model), args.model_dir, curstep, accelerator)
+        if accelerator.is_main_process:
+            shutil.copy(f"{lora_dir}/adapter_model.safetensors", f"{save_dir}/adapter_model.safetensors")
+            accelerator.unwrap_model(model).config.save_pretrained(save_dir)
+        accelerator.wait_for_everyone()
+        #eval_lora(args, save_dir, curstep, full_eval=True)
 
     if args.keep_only_best:
-        # also keep the last checkpoint
-        cp_dirs = sorted(glob(f"{save_dir}/checkpoints/it_*"), key=os.path.getmtime)
-        for cp_dir in cp_dirs[:-1]:
-            shutil.rmtree(cp_dir)
+        if accelerator.is_main_process:
+            # also keep the last checkpoint
+            cp_dirs = sorted(glob(f"{save_dir}/checkpoints/it_*"), key=os.path.getmtime)
+            for cp_dir in cp_dirs[:-1]:
+                shutil.rmtree(cp_dir)
+        accelerator.wait_for_everyone()
 
     if accelerator.is_main_process:
         wandb.unwatch(hypermod)
@@ -347,11 +467,13 @@ def train(
     if args.use_hypernet:
         hypermod.eval()
 
-
-def validate(model, hypermod, val_dataloaders, _get_loss_batch, curstep):
+def validate(model, hypermod, val_dataloaders, _get_loss_batch, curstep, skip_benchmark=True):
+    # skip_benchmark useful when only watcher.py is doing eval over benchmark.
     with torch.no_grad(), evaluating(model, hypermod):
         out = dict()
         for val_dataloader_name, val_dataloader in val_dataloaders.items():
+            if skip_benchmark and ("benchmark" in val_dataloader_name):
+                continue
             if val_dataloader is None:
                 continue
             val_info = defaultdict(list)
@@ -377,8 +499,6 @@ def save_lora_checkpoint(save_dir, model, model_dir, curstep, accelerator):
         save_lora_from_peft_model(model, model_dir, lora_dir)
         if os.path.exists(f"{save_dir}/adapter_config.json"):
             shutil.copy(f"{save_dir}/adapter_config.json", f"{lora_dir}/adapter_config.json")
-    
-    # Wait for main process to finish saving
     accelerator.wait_for_everyone()
     
     return lora_dir
@@ -442,57 +562,30 @@ def generate_and_hook_delta_w(
     hook_handles = []
     factorized_delta_w = dict()
     # Unwrap DDP-wrapped model if needed for attribute access
-    real_model = model.module if hasattr(model, "module") else model
     for target_module in target_modules:
         factorized_delta_w[target_module] = hypermod.get_delta_weights(
             layer_indices.repeat_interleave(bs),
             target_module,
+            model.module if hasattr(model, "module") else model,
             encoded_task_emb.tile(layer_indices.shape[0], 1),
-            factorized=True, # ignored when Z is used.
+            factorized=True
         ) # [832, 8, 8] = [bs * L, r, r]
-        if not "z" in hypermod.exp_setup:
-            lora_A, lora_B = factorized_delta_w[target_module]
-            # print(lora_A.shape)
-            for layer_index in layer_indices:
-                start_indices, end_indices = layer_index * bs, (layer_index + 1) * bs
-                # print(lora_A[start_indices:end_indices].transpose(-1, -2).shape)
-                # raise RuntimeError()
-                handles = add_lora_hooks(
-                    model = model,
-                    module_names=[target_module],
-                    layer_indices=[layer_index],
-                    A=lora_A[start_indices:end_indices].transpose(-1, -2),  # [bs, in_features, r]
-                    B=lora_B[start_indices:end_indices].transpose(-1, -2),  # [bs, r, out_features]
-                    Z=None,
-                    scaling=hypermod.scaling,
-                    input_dropout=inp_dropout,
-                    training=training,
-                )
-                hook_handles += handles
-        else:
-            for layer_index in layer_indices:
-                start_indices, end_indices = layer_index * bs, (layer_index + 1) * bs
-                #print(get_peft_weights(model, hypermod.peft_config))
-                # TODO: make it more elegant later
-                # print(model.base_model.model.model.layers[layer_index].self_attn)
-                A = getattr(
-                    real_model.base_model.model.model.layers[layer_index].self_attn,
-                    target_module
-                ).lora_A["default"].weight.clone().unsqueeze(0).repeat(bs, 1, 1) # [in_features, r]
-                B = getattr(
-                    real_model.base_model.model.model.layers[layer_index].self_attn,
-                    target_module
-                ).lora_B["default"].weight.clone().unsqueeze(0).repeat(bs, 1, 1)
-                handles = add_lora_hooks(
-                    model = model,
-                    module_names=[target_module],
-                    layer_indices=[layer_index],
-                    A=A.transpose(-1, -2),  # [bs, in_features, r]
-                    B=B.transpose(-1, -2),  # [bs, r, out_features]
-                    Z=factorized_delta_w[target_module][start_indices:end_indices],
-                    scaling=hypermod.scaling,
-                    input_dropout=inp_dropout,
-                    training=training,
-                )
-                hook_handles += handles
+        # if not "z" in hypermod.exp_setup:
+        lora_A, lora_B = factorized_delta_w[target_module]
+        # print(lora_A.shape)
+        for layer_index in layer_indices:
+            start_indices, end_indices = layer_index * bs, (layer_index + 1) * bs
+            handles = add_lora_hooks(
+                model = model,
+                module_names=[target_module],
+                layer_indices=[layer_index],
+                A=lora_A[start_indices:end_indices].transpose(-1, -2),  # [bs, in_features, r]
+                B=lora_B[start_indices:end_indices].transpose(-1, -2),  # [bs, r, out_features]
+                # Z=None,
+                scaling=hypermod.scaling,
+                input_dropout=inp_dropout,
+                training=training,
+                # z_type=hypermod.z_type
+            )
+            hook_handles += handles
     return factorized_delta_w, hook_handles

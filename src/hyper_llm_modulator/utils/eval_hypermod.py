@@ -15,20 +15,48 @@ from hyper_llm_modulator.hyper_modulator import load_hypermod_checkpoint, save_l
 from hyper_llm_modulator.res_aggregator import aggregrate_results_and_save_to_file
 from hyper_llm_modulator.utils import generate_simplex_points, get_layers, get_metadata, save_json, log_scalar
 from hyper_llm_modulator.data import BENCHMARK_TASK_INFO
-from hyper_llm_modulator.utils.lora_formatting import convert_qkv_gate_up_lora_to_splits_vllm
+from hyper_llm_modulator.utils.lora_formatting import convert_qkv_gate_up_lora_to_splits_vllm, convert_vera_to_lora
 from hyper_llm_modulator.utils.model_loading import get_tokenizer
 from hyper_llm_modulator.utils.preprocessing import preprocess_result
 from hyper_llm_modulator.utils.utils import embed_texts
 from hyper_llm_modulator.vllm_eval import eval
 
-logger = logging.getLogger()
+logger = logging.getLogger("")
+
+BENCHMARK_TASK_INFO_EXTENDED = {
+        "openbookqa": {"split": "validation[:500]"}, # train is 5k. val and test is 500. name is main. in full: test.
+        "hellaswag": {"split": "validation[:4000]"}, # default is train. train: 40k val is 10k, test is 10k. in full: validation.
+        "winogrande": {"name": "winogrande_debiased", "split": "validation[:1000]", "trust_remote_code": True}, # train 9.2k 1.27k val 1.77k test. in full: validation.
+        "boolq": {"split": "validation[:1000]"}, # validation 3.27k train 9.43k. in full: validation.
+        "piqa": {"split": "validation[:1500]"}, # default is train. train 16k val 2k 3k test. in full: validation.
+        "arc_easy": {"name": "ARC-Easy", "split": "validation[:500]"}, # 570 val 2.38k test train 2.25k. in full: test.
+        "arc_challenge": {"name": "ARC-Challenge", "split": "validation[:500]"}, # 300 val 1.17k test train 1.12k. in full: test.
+        "gsm8k": {"name": "main", "split": "test[:500]"}, # default is train not used in val train: 7.47k test 1.32k. name is main. in full: test.
+        "humaneval": {"split": "test[:30]"}, # default is test not used in val. test: 164. in full: test.
+        "mbpp": {"name": "sanitized", "split": "test[:85]"} # not used in val. test: 427. name is sanitized. in full: test.
+    }
 
 
-def eval_hypermod_checkpoint(checkpoint_path, peft_adapter_path, device, curstep, full_eval, use_icl=False):
+def eval_hypermod_checkpoint(checkpoint_path, device, curstep, full_eval, use_icl=False, new_eval=False):
     # peft_adapter_path in case of using z. Here we read the LORA weights and add it to the model.
     # load checkpoint
+    if new_eval:
+        BENCHMARK_TASK_INFO = BENCHMARK_TASK_INFO_EXTENDED
+    else:
+        BENCHMARK_TASK_INFO = {
+            "openbookqa": {"split": "validation[:500]"},
+            "hellaswag": {"split": "train[:500]"},
+            "winogrande": {"name": "winogrande_debiased", "split": "train[:500]", "trust_remote_code": True},
+            "boolq": {"split": "train[:500]"},
+            "piqa": {"split": "train[:500]"},
+            "arc_easy": {"name": "ARC-Easy", "split": "validation[:500]"},
+            "arc_challenge": {"name": "ARC-Challenge", "split": "validation[:500]"},
+            # "gsm8k": {"split": "test[:500]"},
+            # "humaneval": {"split": "test[:500]"},
+            # "mbpp": {"split": "test[:500]"}
+        }
     args, hypermod, model, tokenizer, emb_model, emb_tokenizer, task_desc_format_fn, pooling_fn = (
-        load_hypermod_checkpoint(checkpoint_path, peft_adapter_path, device)
+        load_hypermod_checkpoint(checkpoint_path, device)
     )
     chat_template = tokenizer.chat_template
     layer_indices = torch.tensor(range(len(get_layers(model))), dtype=torch.long, device=device)
@@ -52,7 +80,7 @@ def eval_hypermod_checkpoint(checkpoint_path, peft_adapter_path, device, curstep
                                                                     layer_indices, 
                                                                     save_dir, 
                                                                     device, 
-                                                                    model if peft_adapter_path is not None else None)
+                                                                    model)
     else:
         all_lora_dirs, save_dicts = generate_loras_for_tasks_from_descs(
             args.model_dir,
@@ -68,7 +96,7 @@ def eval_hypermod_checkpoint(checkpoint_path, peft_adapter_path, device, curstep
             task_desc_format_fn,
             pooling_fn,
             hypermod,
-            model if peft_adapter_path is not None else None
+            model
         )
     # run vllm eval on generated loras
     del hypermod, model, tokenizer, emb_model, emb_tokenizer, task_desc_format_fn, pooling_fn, layer_indices
@@ -78,6 +106,7 @@ def eval_hypermod_checkpoint(checkpoint_path, peft_adapter_path, device, curstep
         ds_kwargs = None
         if "ds_kwargs" in eval_ds_info[eval_ds]:
             ds_kwargs = eval_ds_info[eval_ds]["ds_kwargs"] if eval_ds_info[eval_ds]["ds_kwargs"] else None
+        
         results = do_eval_task(
             args.model_dir,
             chat_template,
@@ -97,22 +126,24 @@ def eval_hypermod_checkpoint(checkpoint_path, peft_adapter_path, device, curstep
         hypermod_name="hyperlora",
     )
     if full_eval:
-        out = {
-            "test/benchmark/acc/other_train_descs": df["benchmark_avg"].loc[("hyperlora", "other_train_descs")],
-            "test/benchmark/acc/random_descs": df["benchmark_avg"].loc[("hyperlora", "random_descs")],
-        }
+        out = {}
+        if ("hyperlora", "other_train_descs") in df["benchmark_avg"].index:
+            out["test/benchmark/acc/other_train_descs"] = df["benchmark_avg"].loc[("hyperlora", "other_train_descs")]
+        if ("hyperlora", "random_descs") in df["benchmark_avg"].index:
+            out["test/benchmark/acc/random_descs"] = df["benchmark_avg"].loc[("hyperlora", "random_descs")]
         if ("hyperlora", "eval_descs") in df["benchmark_avg"].index:
             out["test/benchmark/acc/eval_descs"] = df["benchmark_avg"].loc[("hyperlora", "eval_descs")]
-        else:
+        elif ("hyperlora", "train_descs") in df["benchmark_avg"].index:
             out["test/benchmark/acc/train_descs"] = df["benchmark_avg"].loc[("hyperlora", "train_descs")]
     else:
-        out = {
-            "val/benchmark/acc/other_train_descs": df["benchmark_avg"].loc[("hyperlora", "other_train_descs")],
-            "val/benchmark/acc/random_descs": df["benchmark_avg"].loc[("hyperlora", "random_descs")],
-        }
+        out = {}
+        if ("hyperlora", "other_train_descs") in df["benchmark_avg"].index:
+            out["val/benchmark/acc/other_train_descs"] = df["benchmark_avg"].loc[("hyperlora", "other_train_descs")]
+        if ("hyperlora", "random_descs") in df["benchmark_avg"].index:
+            out["val/benchmark/acc/random_descs"] = df["benchmark_avg"].loc[("hyperlora", "random_descs")]
         if ("hyperlora", "eval_descs") in df["benchmark_avg"].index:
             out["val/benchmark/acc/eval_descs"] = df["benchmark_avg"].loc[("hyperlora", "eval_descs")]
-        else:
+        elif ("hyperlora", "train_descs") in df["benchmark_avg"].index:
             out["val/benchmark/acc/train_descs"] = df["benchmark_avg"].loc[("hyperlora", "train_descs")]
     if wandb.run is not None:
         wandb.log(out, step=curstep)
@@ -161,7 +192,15 @@ def generate_lora_for_tasks_one_hot(
                     task_emb = task_emb.unsqueeze(0)
                     encoded_task_emb = hypermod.task_encoder(task_emb)["encoded_task_emb"].detach()
 
-                    lora_sd = hypermod.gen_lora(layer_indices, encoded_task_emb, model)
+                    lora_sd = hypermod.gen_lora(layer_indices, encoded_task_emb, model, convert_vera2lora=True) # vLLM doesnt support VeRA out of the box
+                    if "vera" in hypermod.exp_setup:
+                        # TODO: maybe add scaling value.
+                        old_to_dict = hypermod.peft_config.to_dict
+                        def new_to_dict(): # hacky way to embed lora_alpha in VeraConfig
+                            d = old_to_dict()
+                            d["lora_alpha"] = 1
+                            return d
+                        hypermod.peft_config.to_dict = new_to_dict
                     save_lora(lora_sd, hypermod.peft_config, lora_dir)
                     # if "Phi-3" in args.model_dir:
                     #     convert_qkv_gate_up_lora_to_splits_vllm(lora_dir)
@@ -201,7 +240,8 @@ def generate_loras_for_tasks_from_descs(
     ds_descs = {ds: train_metadata[ds]["descriptions"] for ds in train_metadata}
     ds_descs.update({ds: val_metadata[ds]["descriptions"] for ds in val_metadata})
 
-    splits = ["train_descs", "eval_descs", "other_train_descs", "random_descs"]
+    #splits = ["train_descs", "eval_descs", "other_train_descs", "random_descs"]
+    splits = ["eval_descs"] # limit splits of publication
     all_lora_dirs = {eval_task: [] for eval_task in eval_ds_info}
     save_dicts = {eval_task: [] for eval_task in eval_ds_info}
     for eval_task, eval_info in eval_ds_info.items():
@@ -212,7 +252,14 @@ def generate_loras_for_tasks_from_descs(
         # take 3 descriptions from other training datasets
         other_train_descs = [random.choice(ds_descs[ds]) for ds in ds_descs if ds != eval_task]
         other_train_descs = random.sample(other_train_descs, k=min(len(other_train_descs), 3))
-        for split, descs in zip(splits, [train_descs, eval_descs, other_train_descs, random_descs]):
+        split2desc = {
+            "train_descs": train_descs,
+            "eval_descs": eval_descs,
+            "other_train_descs": other_train_descs,
+            "random_descs": random_descs
+        }
+        for split in splits:
+            descs = split2desc[split]
             logger.debug(f"{split}: {descs}")
             dirs = [f"{save_dir}/generated_loras/{eval_task}/{split}/lora_{i}" for i in range(len(descs))]
             # lora_dirs[split] = dirs
@@ -241,14 +288,34 @@ def gen_and_save_lora(
     task_emb = embed_texts([task_desc], emb_model, emb_tokenizer, task_desc_format_fn, pooling_fn, device)
     encoder_out = hypermod.task_encoder(task_emb)
     encoded_task_emb = encoder_out["encoded_task_emb"].detach()
-    lora_sd = hypermod.gen_lora(layer_indices, encoded_task_emb, model)
+    lora_sd = hypermod.gen_lora(layer_indices, encoded_task_emb, model, convert_vera2lora=True) # vLLM doesnt support VeRA out of the box
+    if "vera" in hypermod.exp_setup:
+        # TODO: maybe add scaling value.
+        old_to_dict = hypermod.peft_config.to_dict
+        def new_to_dict(): # hacky way to embed lora_alpha in VeraConfig
+            d = old_to_dict()
+            d["lora_alpha"] = 1
+            return d
+        hypermod.peft_config.to_dict = new_to_dict
     save_lora(lora_sd, hypermod.peft_config, lora_dir)
     hypermod.model_config.save_pretrained(lora_dir)
     if "Phi-3" in model_dir:
         convert_qkv_gate_up_lora_to_splits_vllm(lora_dir)
 
 
-def eval_lora(args, lora_dir, curstep, full_eval=False, use_icl=False):
+def eval_lora(args, lora_dir, curstep, full_eval=False, use_icl=False, new_eval=False):
+    if new_eval:
+        BENCHMARK_TASK_INFO = BENCHMARK_TASK_INFO_EXTENDED
+    else:
+        BENCHMARK_TASK_INFO = {
+            "openbookqa": {"split": "validation[:500]"},
+            "hellaswag": {"split": "train[:500]"},
+            "winogrande": {"name": "winogrande_debiased", "split": "train[:500]", "trust_remote_code": True},
+            "boolq": {"split": "train[:500]"},
+            "piqa": {"split": "train[:500]"},
+            "arc_easy": {"name": "ARC-Easy", "split": "validation[:500]"},
+            "arc_challenge": {"name": "ARC-Challenge", "split": "validation[:500]"},
+        }
     save_dicts = None
     all_lora_dirs = [lora_dir]
     eval_ds_info = deepcopy(args.eval_ds_info)
@@ -258,9 +325,15 @@ def eval_lora(args, lora_dir, curstep, full_eval=False, use_icl=False):
         eval_ds_info = {k: v for k, v in eval_ds_info.items() if k in BENCHMARK_TASK_INFO}
         for k in BENCHMARK_TASK_INFO:
             eval_ds_info[k]["ds_kwargs"] = BENCHMARK_TASK_INFO[k]
-
     for eval_ds in eval_ds_info:
         ds_kwargs = eval_ds_info[eval_ds]["ds_kwargs"] if "ds_kwargs" in eval_ds_info[eval_ds] else None
+        # If using VeRA adapters, convert their tensors to LoRA naming so vLLM can load them
+        if ("mt_vera" in args.exp_setup):
+            try:
+                print("converting vera to lora")
+                convert_vera_to_lora(lora_dir)
+            except Exception as e:
+                logger.warning(f"Failed to convert VeRA adapter at {lora_dir}: {e}")
         do_eval_task(
             args.model_dir,
             chat_template,
@@ -272,20 +345,23 @@ def eval_lora(args, lora_dir, curstep, full_eval=False, use_icl=False):
             use_icl,
         )
 
-    perf_files = glob(f"{lora_dir}/eval_results/*_eval_results.json")
-    perf_files = [f for f in perf_files if not f.startswith("lol")]
-    avg_perf = 0
-    for perf_file in perf_files:
-        with open(perf_file, "r") as f:
-            perf_dict = json.load(f)
-        avg_perf += perf_dict[list(perf_dict.keys())[0]][0]["results"]["acc"] / len(perf_files)
-    df = pd.DataFrame.from_dict(dict(model_name=["mt_lora"], split=["test"], benchmark_avg=[avg_perf]))
-    df.to_csv(f"{lora_dir}/eval_results/combined_results.csv", index=False)
+    # Aggregate and save results using the common aggregator for consistency
+    df = aggregrate_results_and_save_to_file(
+        base_model_dir=args.model_dir,
+        mt_lora_dir=args.mt_lora_path,
+        hypermod_dir=lora_dir,
+        hypermod_name=args.exp_setup,
+    )
+    # Compute an overall average across available benchmark rows
     if full_eval:
-        log_scalar(f"test/benchmark/acc/avg", avg_perf, curstep)
+        out = {}
+        out["test/benchmark/acc/eval_descs"] = df["benchmark_avg"].loc[(args.exp_setup, "eval_descs")]
     else:
-        log_scalar(f"val/benchmark/acc/avg", avg_perf, curstep)
-    return avg_perf
+        out = {}
+        out["val/benchmark/acc/eval_descs"] = df["benchmark_avg"].loc[(args.exp_setup, "eval_descs")]
+    if wandb.run is not None:
+        wandb.log(out, step=curstep)
+    return out
 
 
 @torch.no_grad()
@@ -316,10 +392,26 @@ def do_eval_task(
 
     for (lora_dir, res), save_dict in zip(full_results.items(), save_dicts):
         sampled_res_details = res.sample_details[:10]
+        
+        # Extract correctness field from sample details
+        correctness_values = []
+        for sample in res.sample_details:
+            sample_correctness = {}
+            if 'base_correct' in sample:
+                sample_correctness["base_correct"] = sample['base_correct']
+            if 'plus_correct' in sample:
+                sample_correctness["plus_correct"] = sample['plus_correct']
+            if 'is_correct' in sample:
+                sample_correctness["is_correct"] = sample['is_correct']
+            if 'correct' in sample:
+                sample_correctness["correct"] = sample['correct']
+            correctness_values.append(sample_correctness)
+        
         results[eval_dataset].append(
             dict(
                 results=preprocess_result(res, perf_keys),
                 sampled_res_details=sampled_res_details,
+                sample_correctness=correctness_values,
                 **save_dict,
             )
         )

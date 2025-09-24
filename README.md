@@ -42,8 +42,9 @@ Each takes around 5 days on a single H100 GPU for 20k epochs and 2 days for 2k e
 ```bash
 # T2L training
 ./scripts/train_t2l_mistral.sh
-./scripts/train_t2l_llama.sh
-./scripts/train_t2l_gemma.sh
+# Zhyper training
+./scripts/train_diag_zhyper_mistral.sh
+./scripts/train_square_zhyper_mistral.sh
 ```
 ---
 

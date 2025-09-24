@@ -1,4 +1,5 @@
 import argparse
+import os
 import sys
 import time
 import random
@@ -51,10 +52,9 @@ def load_hypermod(hypermod_dir, device):
         pooling_fn,
     )
 
-
 if __name__ == "__main__":
     hypermod_dir = sys.argv[1]
-    task_desc = sys.argv[2].strip("\"' ")
+    task_desc = "In this task, you need to write a short poem inspired by a title. The focus is on capturing the voice of a young child, using straightforward language and continuous sentences."
 
     print(f"\nGenerating LoRA for description:\n\n{task_desc}")
 
@@ -69,6 +69,8 @@ if __name__ == "__main__":
     uuid = "".join(
         [random.choice(string.ascii_letters + string.digits) for _ in range(8)]
     )
+    # generate loras
+    start_time = time.time()
     (
         args,
         hypermod,
@@ -83,15 +85,16 @@ if __name__ == "__main__":
     layer_indices = torch.tensor(layer_indices, dtype=torch.long, device=device)
     emb_size = emb_model.config.hidden_size
 
-    # generate loras
     task_emb = embed_texts(
         [task_desc], emb_model, emb_tokenizer, task_desc_format_fn, pooling_fn, device
     )
     encoder_out = hypermod.task_encoder(task_emb)
     encoded_task_emb = encoder_out["encoded_task_emb"].detach()
-    lora_sd = hypermod.gen_lora(layer_indices, encoded_task_emb) # TODO: add model
+    lora_sd = hypermod.gen_lora(layer_indices, encoded_task_emb, model)
     lora_dir = f"{hypermod_dir}/extras/user_generated/{curtime}_{uuid}/"
     save_lora(lora_sd, peft_config, lora_dir)
     with open(f"{lora_dir}/task_desc.txt", "w") as f:
         f.write(task_desc)
+    elapsed_sec = time.time() - start_time
     print(f"Saved lora to {lora_dir}")
+    print(f"LoRA generation elapsed time: {elapsed_sec:.2f}s")

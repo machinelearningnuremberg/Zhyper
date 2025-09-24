@@ -106,7 +106,7 @@ def prcoess_subreddit_names_reverse(subreddit_name, map_to_metadata=True):
     return country
 
 if __name__ == "__main__":
-    DATA_DIR="/home/hpc/b250be/b250be18/HyperAlignz/cul_data/descriptions_commands"
+    DATA_DIR="cul_data/descriptions_commands"
     files = os.listdir(DATA_DIR)
     for file in files:
         file_path = os.path.join(DATA_DIR, file)
@@ -114,8 +114,7 @@ if __name__ == "__main__":
         country = prcoess_subreddit_names_reverse(subreddit)
         with open(file_path, "r") as file:
             rand_cond = yaml.safe_load(file)[0]
-        default_hypermod_dir = "/hnvme/workspace/b250be18-hf_helma_1/HyperAlign/train_outputs/sft/z_hyper_lora/20250923-131701_d1aea0e7" # country
-        # default_hypermod_dir = "/hnvme/workspace/b250be18-hf_helma_1/HyperAlign/train_outputs/sft/z_hyper_lora/20250923-131713_42a10175" # region
+        default_hypermod_dir = ""
         default_task_desc = rand_cond
 
         # Use args if available, otherwise fallback

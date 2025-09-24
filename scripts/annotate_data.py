@@ -133,12 +133,6 @@ import yaml
 import os
 
 gen_size = 10
-# File paths
-# subreddit = "AskMiddleEast"
-# subreddit = "AskAGerman"
-# input_file = f"/home/hpc/b250be/b250be18/HyperAlignz/data/{subreddit}.csv"
-# # Load full input data
-# input_df = pd.read_csv(input_file)
 
 DATA_DIR="cul_data"
 read_local_command_templates = False

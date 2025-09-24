@@ -76,19 +76,34 @@ country2nationality = {
     "france": "french",
 }
 
-def prcoess_subreddit_names_reverse(subreddit_name):
+def prcoess_subreddit_names_reverse(subreddit_name, map_to_metadata=True):
     nat2country = {v:k for k, v in country2nationality.items()}
     subreddit_name = subreddit_name.lower()
-    nat = ""
+    subreddit_subname = ""
     if "askan" in subreddit_name:
-        nat = subreddit_name.split("askan")[-1]
+        subreddit_subname = subreddit_name.split("askan")[-1]
+        country = nat2country[subreddit_subname]
     elif "aska" in subreddit_name and "asia" not in subreddit_name and "argentina" not in subreddit_name:
-        nat =  subreddit_name.split("aska")[-1]
+        subreddit_subname =  subreddit_name.split("aska")[-1]
+        country = nat2country[subreddit_subname]
     elif subreddit_name[-1] == "s":
-        nat =  subreddit_name.split("ask")[-1][: -1]
+        subreddit_subname =  subreddit_name.split("ask")[-1][: -1]
+        country = nat2country[subreddit_subname]
+    elif subreddit_name.split("ask")[-1] in list(country2nationality.keys()):
+        country = subreddit_name.split("ask")[-1]
+
     else:
-        nat =  country2nationality[subreddit_name.split("ask")[-1]]
-    return nat2country[nat].title()
+        raise NotImplementedError(f"{subreddit_name}")
+    if map_to_metadata:
+        if country == "uk":
+            country = "UK"
+        elif country == "america":
+            country = "US"
+        elif country == "middleeast":
+            country = "MiddleEast"
+        else: 
+            country = country.title()
+    return country
 
 if __name__ == "__main__":
     DATA_DIR="/home/hpc/b250be/b250be18/HyperAlignz/cul_data/descriptions_commands"
@@ -99,18 +114,13 @@ if __name__ == "__main__":
         country = prcoess_subreddit_names_reverse(subreddit)
         with open(file_path, "r") as file:
             rand_cond = yaml.safe_load(file)[0]
-        default_hypermod_dir = "/hnvme/workspace/b250be18-hf_helma_1/HyperAlign/train_outputs/sft/z_hyper_lora/20250911-144303_KOCReKeU"
-        # default_task_desc   = "You are a German person. A German is someone who values order and punctuality, often showing a strong sense of responsibility in daily life."
+        default_hypermod_dir = "/hnvme/workspace/b250be18-hf_helma_1/HyperAlign/train_outputs/sft/z_hyper_lora/20250923-131701_d1aea0e7" # country
+        # default_hypermod_dir = "/hnvme/workspace/b250be18-hf_helma_1/HyperAlign/train_outputs/sft/z_hyper_lora/20250923-131713_42a10175" # region
         default_task_desc = rand_cond
-        # default_exp_setup   = "hyper_lora"
-        # TODO add index here for one hot
-        ds_one_hot = None
 
         # Use args if available, otherwise fallback
         hypermod_dir = sys.argv[1] if len(sys.argv) > 1 else default_hypermod_dir
-        task_desc    = sys.argv[2].strip("\"' ") if len(sys.argv) > 2 else default_task_desc
-
-        print(f"\nGenerating LoRA for description:\n\n{task_desc}")
+        task_desc = sys.argv[2].strip("\"' ") if len(sys.argv) > 2 else default_task_desc
 
         device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
@@ -119,11 +129,19 @@ if __name__ == "__main__":
         peft_config = get_peft_config(
             PeftConfig.from_json_file(f"{hypermod_dir}/adapter_config.json")
         )
-        # curtime = time.strftime("%Y%m%d_%H%M%S", time.localtime())
-        # uuid = "".join(
-        #     [random.choice(string.ascii_letters + string.digits) for _ in range(8)]
-        # )
-        # save_name = f"{curtime}_{uuid}"
+        print(f"\nGenerating LoRA for :\n\n{country}")
+        if args.use_one_hot_task_emb:
+            ds_type = "one_hot"
+            dataset_name = f"cul_{country}"
+            if dataset_name not in args.train_ds_names:
+                # skip unknown countries/regions
+                print("Skipped...")
+                continue
+            print(f"\nGenerating one-hot LoRA for :\n\n{dataset_name}")
+        else:
+            ds_type = "embeds"
+            print(f"\nGenerating LoRA for description:\n\n{task_desc}")
+
         save_name = f"{country}"
         (
             args,
@@ -137,13 +155,11 @@ if __name__ == "__main__":
         ) = load_hypermod(hypermod_dir, device)
         layer_indices = range(len(get_layers(model)))
         layer_indices = torch.tensor(layer_indices, dtype=torch.long, device=device)
-        emb_size = emb_model.config.hidden_size
 
         # generate loras
-        if False:
-            # TODO
+        if ds_type == "one_hot":
             eye = torch.eye(len(args.train_ds_names)).to(device)
-            train_idx = args.train_ds_names.index(ds_one_hot)
+            train_idx = args.train_ds_names.index(dataset_name)
             task_emb = eye[train_idx].unsqueeze(0)
             # task_emb = task_emb.unsqueeze(0)
         else:

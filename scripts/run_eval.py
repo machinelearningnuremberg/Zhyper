@@ -20,6 +20,8 @@ if __name__ == "__main__":
     parser.add_argument("--save-to-base-model-dir", action="store_true")
     args = parser.parse_args()
     print(args)
+    if isinstance(args.lora_dirs, str):
+        args.lora_dirs = [args.lora_dirs]
     tokenizer = get_tokenizer(args.model_dir)
     for task in args.tasks:
         print(f"Evaluating {task}")
@@ -43,12 +45,25 @@ if __name__ == "__main__":
             if args.save_results and args.lora_dirs:
                 result_path = f"{k}/eval_results/{json_name}.json"
                 os.makedirs(os.path.dirname(result_path), exist_ok=True)
+                correctness_values = []
+                for sample in res[k].sample_details:
+                    sample_correctness = {}
+                    if 'base_correct' in sample:
+                        sample_correctness["base_correct"] = sample['base_correct']
+                    if 'plus_correct' in sample:
+                        sample_correctness["plus_correct"] = sample['plus_correct']
+                    if 'is_correct' in sample:
+                        sample_correctness["is_correct"] = sample['is_correct']
+                    if 'correct' in sample:
+                        sample_correctness["correct"] = sample['correct']
+                    correctness_values.append(sample_correctness)
                 save_json(
                     {
                         task: [
                             dict(
                                 results=res[k].aggregate_metrics,
                                 sampled_res_details=res[k].sample_details[:10],
+                                sample_correctness=correctness_values,
                                 path=k,
                             )
                         ]
@@ -59,11 +74,11 @@ if __name__ == "__main__":
         if args.save_to_base_model_dir:
             if not args.lora_dirs:
                 result_path = (
-                    f"eval_results/{args.model_dir}/base_model/{json_name}.json"
+                    f"{args.model_dir}/eval_results/base_model/{json_name}.json"
                 )
             else:
                 result_path = (
-                    f"eval_results/{args.model_dir}/lora/{json_name}_lora.json"
+                    f"{args.lora_dirs}/eval_results/lora/{json_name}_lora.json"
                 )
             os.makedirs(os.path.dirname(result_path), exist_ok=True)
             save_json(

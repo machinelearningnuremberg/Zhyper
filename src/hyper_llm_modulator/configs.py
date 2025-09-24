@@ -106,8 +106,14 @@ class TrainingArguments:
     training_task: Literal["sft", "recon"] = field(default="sft", metadata={"help": "SFT vs reconstruction training."})
     model_dir: str = field(default=None, metadata={"help": "The model directory."})
     emb_model: str = field(default="", metadata={"help": "The embedding model."})
-    exp_setup: Literal["lora", "vera", "hyper_lora", "z_hyper_lora", "hyper_vera"] = field(
+    exp_setup: Literal["lora", "vera", "hyper_lora", "z_hyper_lora", "hyper_vera", "rand_shared_z_hyper_lora", "rand_shared_learnable_z_hyper_lora"] = field(
         default=None, metadata={"help": "The finetuning setup."}
+    )
+    ds_type: Literal["task", "align"] = field(
+        default="task", metadata={"help": "Training dataset type."}
+    )
+    z_type: Literal["full", "diag"] = field(
+        default="full", metadata={"help": "type of z matrix used in z_hyper_lora exp_setup."}
     )
     sft_mode: Literal["causal_lm", "completion"] = field(
         default=None,
@@ -129,6 +135,7 @@ class TrainingArguments:
     n_descs_per_ds: int = field(default=None, metadata={"help": "The number of descriptions per dataset."})
     inp_max_len: int = field(default=512, metadata={"help": "The maximum input length."})
     target_modules: List[str] = field(default=None, metadata={"help": "The target modules for training."})
+    r: int = field(default=8, metadata={"help": "The r dim of A and B"})
     shared_AB_head: bool = field(
         default=False,
         metadata={"help": "Whether to share the A and B heads in the HyperLoRA model."},
@@ -144,7 +151,7 @@ class TrainingArguments:
             "Can only be used when autoreg_gen is True."
         },
     )
-    learnable_AB_offset: bool = field(
+    learnable_output_offset: bool = field(
         default=False,
         metadata={"help": "Whether to use learnable A and B offsets in the HyperLoRA model."},
     )
@@ -202,11 +209,11 @@ class TrainingArguments:
     logging_freq: int = field(default=100, metadata={"help": "The wandb logging frequency."})
     val_freq: int = field(default=10000, metadata={"help": "The validation frequency."})
     model_watch_freq: int = field(default=5000, metadata={"help": "The model watching frequency."})
-    save_freq: int = field(default=10**100, metadata={"help": "The saving and gradient/weight logging frequency."})
+    gen_freq: int = field(default=100, metadata={"help": "generation frequency."})
     seed: int = field(default=42, metadata={"help": "The random seed."})
     debug: bool = field(default=False, metadata={"help": "Whether to run in debug mode."})
     notes: str = field(default=None, metadata={"help": "wandb note."})
-    keep_only_best: bool = field(default=True, metadata={"help": "Whether or not to delete intermediate checkpoints."})
+    keep_only_best: bool = field(default=False, metadata={"help": "Whether or not to delete intermediate checkpoints."})
 
     skip_eval: bool = field(default=False, metadata={"help": "Whether to skip evaluation."})
     eval_ds_info: dict = field(default=None, metadata={"help": "The datasets and their infomation for evaluation"})
@@ -215,7 +222,9 @@ class TrainingArguments:
         default=False,
         metadata={"help": "Whether to save eval results to the base model directory (Used with normal LoRA only)."},
     )
-    n_tasks_per_batch: int = field(
+    save_dir: Optional[str] = field(default=None, metadata={"help": ("Path to save model weights and logs")})
+    run_name: Optional[str] = field(default=None, metadata={"help": ("run name")}) 
+    n_ds_per_batch: int = field(
         default=8,
         metadata={"help": ("Number of tasks to sample per batch. Use lower number in case of OOM.")},
     )

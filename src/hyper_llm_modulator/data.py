@@ -7,7 +7,7 @@ import json
 import logging
 import os
 import random
-from typing import Union
+from typing import Literal, Union
 
 import torch
 import datasets
@@ -22,7 +22,7 @@ from hyper_llm_modulator.utils import (
     repeat_iterator,
 )
 
-logger = logging.getLogger()
+logger = logging.getLogger("")
 
 DATA_DIR = "data"
 TRANSFORMED_DS_DIR = "data/transformed_datasets"
@@ -97,6 +97,12 @@ class HierachicalBatchSampler(Sampler):
     def __iter__(self):
         # TODO: iterate over all samples in one epoch
         task_indices = torch.randperm(self.n_datasets)
+        assert (
+            self.n_datasets >= self.n_ds_per_batch
+        ), (
+            f"HierachicalBatchSampler: n_ds_per_batch ({self.n_ds_per_batch}) "
+            f"exceeds number of datasets ({self.n_datasets})."
+        )
         for i in range(0, self.n_datasets, self.n_ds_per_batch):
             batch_indices = []
             if i + self.n_ds_per_batch > self.n_datasets:
@@ -131,21 +137,23 @@ def get_datasets(dataset_names, metadata, tokenizer, sft_mode, is_intx_model, in
                 metadata, tokenizer, sft_mode, is_intx_model, ds_name, ds_kwargs
             )
             logger.debug(f"formatted example: {formatted_dataset[:5]}")
+            #removed_clmns = formatted_dataset.column_names.pop(formatted_dataset.column_names.index("input_prompt"))
+            removed_clmns = formatted_dataset.column_names
             tokenized_dataset = formatted_dataset.map(
-                inp_tokenize_fn, batched=True, remove_columns=formatted_dataset.column_names
+                inp_tokenize_fn, batched=True, remove_columns=removed_clmns
             )
             logger.debug(f"tokenized example: {tokenized_dataset[:5]}")
             tokenized_dataset.set_format("torch")
 
             logger.debug(f"Saving preprocessed dataset: {ds_hash}")
             tokenized_dataset.save_to_disk(f"{TRANSFORMED_DS_DIR}/{ds_hash}")
-
         out[ds_name] = tokenized_dataset
 
     return out
 
 
 def load_and_format_dataset(metadata, tokenizer, sft_mode, is_intx_model, ds_name, ds_kwargs):
+    logging.info(f"Processing {ds_name}")
     ds_repr = f"{ds_name}_{json.dumps(ds_kwargs)}_{tokenizer.name_or_path.strip('/')}_{sft_mode}_{is_intx_model}"
     ds_repr += f"_{json.dumps(metadata[ds_name])}"
     ds_hash = hashlib.sha256(ds_repr.encode("utf-8")).hexdigest()
@@ -155,6 +163,30 @@ def load_and_format_dataset(metadata, tokenizer, sft_mode, is_intx_model, ds_nam
     else:
         if "trust_remote_code" not in list(ds_kwargs.keys()):
             ds_kwargs["trust_remote_code"] = True
+        if "cul" in ds_name and ds_kwargs.get("path") == "csv":
+            try:
+                from datasets import Features, Value
+                ds_kwargs["features"] = Features(
+                    {
+                        "submission_author": Value("string"),
+                        "submission_title": Value("string"),
+                        "submission_score": Value("string"),
+                        "submission_created": Value("string"),
+                        "submission_link": Value("string"),
+                        "submission_text": Value("string"),
+                        "link_id": Value("string"),
+                        "submission_is_self": Value("string"),
+                        "submission_is_reddit_media_domain": Value("string"),
+                        "comment_author": Value("string"),
+                        "comment_score": Value("string"),
+                        "comment_created": Value("string"),
+                        "comment_link": Value("string"),
+                        "comment_body": Value("string"),
+                    }
+                )
+            except Exception:
+                # Fallback: let datasets infer if Features import isn't available
+                pass
         dataset = load_dataset(**ds_kwargs)
         processed_dataset = dataset.map(get_preprocessing_fn(ds_name), batched=False)
 
@@ -165,6 +197,77 @@ def load_and_format_dataset(metadata, tokenizer, sft_mode, is_intx_model, ds_nam
         formatted_dataset.save_to_disk(f"{TRANSFORMED_DS_DIR}/{ds_hash}")
     return formatted_dataset
 
+# def get_datasets(dataset_names, metadata, tokenizer, sft_mode, is_intx_model, inp_max_len):
+#     out = dict()
+#     dataset_info_dict = {k: metadata[k]["ds_kwargs"] for k in dataset_names}
+#     inp_tokenize_fn = get_inp_tokenize_fn(tokenizer, sft_mode, is_intx_model, inp_max_len)
+#     for i, (ds_name, ds_kwargs) in enumerate(dataset_info_dict.items()):
+#         logger.debug(f"ds_name: {ds_name}, ds_kwargs: {ds_kwargs}")
+#         # get hash for the dataset
+#         ds_repr = f"{ds_name}_{json.dumps(ds_kwargs)}_{tokenizer.name_or_path.strip('/')}_{sft_mode}_{is_intx_model}_{inp_max_len}"
+#         ds_repr += f"_{json.dumps(metadata[ds_name])}"
+#         ds_hash = hashlib.sha256(ds_repr.encode("utf-8")).hexdigest()
+#         formatted_dataset = load_and_format_dataset(
+#             metadata, tokenizer, sft_mode, is_intx_model, ds_name, ds_kwargs
+#         )
+#         logger.debug(f"formatted example: {formatted_dataset[:5]}")
+#         #removed_clmns = formatted_dataset.column_names.pop(formatted_dataset.column_names.index("input_prompt"))
+#         removed_clmns = formatted_dataset.column_names
+#         tokenized_dataset = formatted_dataset.map(
+#             inp_tokenize_fn, batched=True, remove_columns=removed_clmns
+#         )
+#         logger.debug(f"tokenized example: {tokenized_dataset[:5]}")
+#         tokenized_dataset.set_format("torch")
+
+#         logger.debug(f"Saving preprocessed dataset: {ds_hash}")
+#         tokenized_dataset.save_to_disk(f"{TRANSFORMED_DS_DIR}/{ds_hash}")
+#     out[ds_name] = tokenized_dataset
+
+#     return out
+
+
+# def load_and_format_dataset(metadata, tokenizer, sft_mode, is_intx_model, ds_name, ds_kwargs):
+#     logging.info(f"Processing {ds_name}")
+#     ds_repr = f"{ds_name}_{json.dumps(ds_kwargs)}_{tokenizer.name_or_path.strip('/')}_{sft_mode}_{is_intx_model}"
+#     ds_repr += f"_{json.dumps(metadata[ds_name])}"
+#     ds_hash = hashlib.sha256(ds_repr.encode("utf-8")).hexdigest()
+#     if "trust_remote_code" not in list(ds_kwargs.keys()):
+#         ds_kwargs["trust_remote_code"] = True
+#     if "cul" in ds_name and ds_kwargs.get("path") == "csv":
+#         # Force a stable CSV schema to avoid Arrow casting issues (e.g., 'True' into int64)
+#         try:
+#             from datasets import Features, Value
+#             ds_kwargs["features"] = Features(
+#                 {
+#                     "submission_author": Value("string"),
+#                     "submission_title": Value("string"),
+#                     "submission_score": Value("string"),
+#                     "submission_created": Value("string"),
+#                     "submission_link": Value("string"),
+#                     "submission_text": Value("string"),
+#                     "link_id": Value("string"),
+#                     "submission_is_self": Value("string"),
+#                     "submission_is_reddit_media_domain": Value("string"),
+#                     "comment_author": Value("string"),
+#                     "comment_score": Value("string"),
+#                     "comment_created": Value("string"),
+#                     "comment_link": Value("string"),
+#                     "comment_body": Value("string"),
+#                 }
+#             )
+#         except Exception:
+#             # Fallback: let datasets infer if Features import isn't available
+#             pass
+#     dataset = load_dataset(**ds_kwargs)
+#     processed_dataset = dataset.map(get_preprocessing_fn(ds_name), batched=False)
+
+#     prompt_formatting_fn = get_prompt_formatting_fn(
+#         metadata[ds_name], sft_mode, tokenizer.apply_chat_template, is_intx_model
+#     )
+#     formatted_dataset = processed_dataset.map(prompt_formatting_fn, batched=True)
+#     formatted_dataset.save_to_disk(f"{TRANSFORMED_DS_DIR}/{ds_hash}")
+#     return formatted_dataset
+
 
 @torch.no_grad()
 def get_task_embs(
@@ -173,7 +276,7 @@ def get_task_embs(
     emb_tokenizer,
     task_desc_format_fn,
     pooling_fn,
-    device,
+    device
 ):
     out = dict()
     for i, (ds_name, descs) in enumerate(ds_descs.items()):
@@ -219,7 +322,7 @@ def get_dataloader(
     use_per_task_emb,
     use_inp_as_desc,
     use_per_sample_desc,
-    n_tasks_per_batch,
+    n_ds_per_batch,
     n_points_per_task,
     use_hierarchical_sampler,
     batch_size,  # only needed for random sampler
@@ -230,7 +333,7 @@ def get_dataloader(
 
     ds_list = []
     for ds_name in ds_dict:
-        if use_per_task_emb:
+        if use_per_task_emb: # random embdding from a poool of embeddings
             ds_list.append(PerTaskEmbSFTDataset(ds_dict[ds_name], task_embs_dict[ds_name], validation))
         elif use_inp_as_desc or use_per_sample_desc:
             ds_list.append(PerSampleEmbSFTDataset(ds_dict[ds_name], task_embs_dict[ds_name], validation))
@@ -240,7 +343,7 @@ def get_dataloader(
 
     dataset = torch.utils.data.ConcatDataset(ds_list)
     if use_hierarchical_sampler:
-        sampler = HierachicalBatchSampler(dataset, n_tasks_per_batch, n_points_per_task)
+        sampler = HierachicalBatchSampler(dataset, n_ds_per_batch, n_points_per_task)
     else:
         sampler = torch.utils.data.RandomSampler(dataset)
         sampler = torch.utils.data.BatchSampler(sampler, batch_size, drop_last=False)
@@ -258,7 +361,7 @@ def create_dataloaders(
     emb_model,
     emb_tokenizer,
     task_desc_format_fn,
-    pooling_fn,
+    pooling_fn
 ):
 
     _get_datasets = partial(
@@ -274,7 +377,7 @@ def create_dataloaders(
         use_per_task_emb=args.use_per_task_emb,
         use_inp_as_desc=args.use_inp_as_desc,
         use_per_sample_desc=args.use_per_sample_desc,
-        n_tasks_per_batch=args.n_tasks_per_batch,
+        n_ds_per_batch=args.n_ds_per_batch,
         n_points_per_task=args.n_points_per_task,
     )
 
@@ -287,7 +390,8 @@ def create_dataloaders(
 
     for ds_name in args.train_ds_names:
         # by default, we load max 10,000 samples for each task (see tasks/lol_*/metadata.yaml)
-        # which, as far as i can tell, does not actually cap the number of samples
+        # which, as far as i can tell, does not actually cap the number of samples.
+        # for cultures max 90% of 25k.
         if ds_name in args.eval_ds_info:
             # make a validation split for tasks that are in both training and validation
             train_metadata[ds_name]["ds_kwargs"]["split"] = "train[:90%]"
@@ -302,12 +406,21 @@ def create_dataloaders(
 
     if use_hypernet or "mt" in args.exp_setup:
         # meta-validation datasets
+        # unseen cultures/tasks
         unseen_val_ds_names = [
-            name for name in args.eval_ds_info if name.startswith("lol") and name not in args.train_ds_names
+            name for name in args.eval_ds_info if name.startswith("lol" if args.ds_type == "task" else "cul") and name not in args.train_ds_names
         ]
-        benchmark_val_ds_names = [t for t in BENCHMARK_TASK_INFO if t in val_metadata]
+        if args.ds_type == "task":
+            benchmark_val_ds_names = [t for t in BENCHMARK_TASK_INFO if t in val_metadata]
+        else:
+            # this shouldnt work in one hot setting
+            benchmark_val_ds_names = [] # TODO: add benchmark cultures
+
         for ds_name in unseen_val_ds_names:
-            val_metadata[ds_name]["ds_kwargs"]["split"] = "valid[:500]"
+            if args.ds_type =="task":
+                val_metadata[ds_name]["ds_kwargs"]["split"] = "valid[:500]"
+            elif args.ds_type =="align":
+                val_metadata[ds_name]["ds_kwargs"]["split"] = "train[:500]"
         for ds_name in benchmark_val_ds_names:
             val_metadata[ds_name]["ds_kwargs"].update(BENCHMARK_TASK_INFO[ds_name])
 
@@ -317,6 +430,8 @@ def create_dataloaders(
     logging.info(f"{args.use_per_task_emb=}\n{args.use_inp_as_desc=}\n{args.use_per_sample_desc=}")
 
     for split_name, ds_names in zip(out, ds_names_list):
+        # for each split, create an embbeding.
+        # if one-hot create an embedding with len(ds_names)
         logger.info(f"{split_name=}, {ds_names=}")
         if len(ds_names) == 0:
             continue
@@ -340,7 +455,6 @@ def create_dataloaders(
         )
         val_kwargs = dict(use_hierarchical_sampler=False, batch_size=args.val_batch_size, validation=True)
         kwargs = train_kwargs if split_name == "train" else val_kwargs
-
         out[split_name] = _get_dataloader(ds_dict, ds_embs_dict, **kwargs)
 
     return out
@@ -390,7 +504,6 @@ def get_embs_dict(args, emb_model, emb_tokenizer, task_desc_format_fn, pooling_f
         ds_embs_dict = {
             ds_name: torch.eye(len(ds_names), device=device)[i].unsqueeze(0) for i, ds_name in enumerate(ds_names)
         }
-
     return ds_embs_dict
 
 
@@ -467,17 +580,90 @@ def get_recon_train_data(state_dict, target_modules, layer_indices, device, outp
 
 if __name__ == "__main__":
     from datasets import load_dataset
+    import yaml
+    from pathlib import Path
+    from hyper_llm_modulator.utils.task_metadata import get_metadata
+    from hyper_llm_modulator.utils.model_loading import get_emb_model_and_fns
+    from hyper_llm_modulator.utils.model_loading import get_tokenizer
+    from types import SimpleNamespace
+
+    with Path("configs/hyper_lora_align_OHE.yaml").open("r") as f:
+        config = yaml.safe_load(f)
+    config["train_ds_names"] = config["train_ds_names"][: 5]
+    config["use_hypernet"] = use_hypernet = "hyper" in config["exp_setup"]
+    # get task metadata and save to the corresponding run folder
+    args_dict = {
+        "sft_mode": "causal_lm",
+        "inp_max_len": 512,
+        "use_per_sample_desc": False,
+        "n_ds_per_batch": 2,
+        "n_points_per_task": 1,
+        "use_inp_as_desc": False,
+        "train_ds_names": config["train_ds_names"],
+        "eval_ds_info": config["eval_ds_info"],
+        "n_descs_per_ds": None,
+        "use_hierarchical_sampler": True,
+        "batch_size": 4,
+        "val_batch_size": 64,
+        "use_default_desc": False,
+        # one-hot
+        "use_per_task_emb": True,
+        "use_one_hot_task_emb": True,
+
+        "ds_type": "align"
+    }
+    train_metadata = get_metadata(config["train_ds_names"], args_dict["use_per_task_emb"], is_culture=True)
+    val_metadata = get_metadata(config["eval_ds_info"], args_dict["use_per_task_emb"], is_culture=True)
+    device = "cuda:0"
+
+    emb_model = None
+    emb_tokenizer = None
+    task_desc_format_fn = None
+    use_explicit_emb_model = False
+    pooling_fn = None
+
+
+    if not args_dict["use_one_hot_task_emb"]:
+        use_explicit_emb_model = True
+        emb_model, emb_tokenizer, task_desc_format_fn, pooling_fn = get_emb_model_and_fns(
+            "Alibaba-NLP/gte-large-en-v1.5", device
+        )
+        logger.debug(f"emb_model: {emb_model}")
+        emb_model.eval()
+    tokenizer = get_tokenizer("mistralai/Mistral-7B-Instruct-v0.2")
 
     seed = 42
-    ds1 = load_dataset("Lots-of-LoRAs/task022_cosmosqa_passage_inappropriate_binary", "default", split="train[:5]")
-    ds2 = load_dataset("Lots-of-LoRAs/task033_winogrande_answer_generation", split="train[:5]")
-    ds3 = load_dataset("Lots-of-LoRAs/task034_winogrande_question_modification_object", split="train[:5]")
-    ds4 = load_dataset("Lots-of-LoRAs/task035_winogrande_question_modification_person", split="train[:5]")
-    dataset = ConcatDataset([ds1, ds2, ds3, ds4])
-    sampler = HierachicalBatchSampler(dataset, 2, 2)
-    dataloader = DataLoader(dataset, batch_sampler=sampler)
-    breakpoint()
-    for batch in repeat_iterator(dataloader):
-        print(batch["id"])
-        breakpoint()
-    print("done")
+    _dataloaders = create_dataloaders(
+        args=SimpleNamespace(**args_dict),
+        train_metadata=train_metadata,
+        val_metadata=val_metadata,
+        use_hypernet=True,
+        device=device,
+        tokenizer=tokenizer,
+        is_intx_model = tokenizer.chat_template is not None,
+        emb_tokenizer=emb_tokenizer,
+        emb_model=emb_model,
+        task_desc_format_fn=task_desc_format_fn,
+        pooling_fn=pooling_fn,
+
+    )
+    print(_dataloaders)
+    train_dataloader = _dataloaders["train"]
+    print("train")
+    for batch in train_dataloader:
+        print(batch)
+    # for batch in _dataloaders["val/seen"]:
+    #     print(batch)
+    # print("val")
+    # ds1 = load_dataset("Lots-of-LoRAs/task022_cosmosqa_passage_inappropriate_binary", "default", split="train[:5]")
+    # ds2 = load_dataset("Lots-of-LoRAs/task033_winogrande_answer_generation", split="train[:5]")
+    # ds3 = load_dataset("Lots-of-LoRAs/task034_winogrande_question_modification_object", split="train[:5]")
+    # ds4 = load_dataset("Lots-of-LoRAs/task035_winogrande_question_modification_person", split="train[:5]")
+    # dataset = ConcatDataset([ds1, ds2, ds3, ds4])
+    # sampler = HierachicalBatchSampler(dataset, 2, 2)
+    # dataloader = DataLoader(dataset, batch_sampler=sampler)
+    # breakpoint()
+    # for batch in repeat_iterator(dataloader):
+    #     print(batch["id"])
+    #     breakpoint()
+    # print("done")

@@ -17,9 +17,9 @@ from hyper_llm_modulator.utils.eval_hypermod import gen_and_save_lora
 
 
 GUIDELINE = """
-# Text-to-LoRA (T2L)
+# Zhyper
 
-This is a chatbot demo of the Text-to-LoRA (T2L) model with Mistral-7B-Instruct-v0.2 as the base model.
+This is a chatbot demo of the Zhyper model with Mistral-7B-Instruct-v0.2 as the base model.
 
 ## How to use
 
@@ -186,7 +186,7 @@ def build_demo():
     model_dir = "mistralai/Mistral-7B-Instruct-v0.2"
 
     with gr.Blocks(
-        title="Text-to-LoRA", fill_height=True, theme=gr.themes.Ocean()
+        title="Zhyper", fill_height=True, theme=gr.themes.Ocean()
     ) as demo:
         # Loading indicator for the entire app
         loading_indicator = gr.HTML(
@@ -223,7 +223,7 @@ def build_demo():
 
             # Chat Interface
             with gr.Column() as chat_interface:
-                title = gr.Markdown("# Text-to-LoRA Chat Interface")
+                title = gr.Markdown("# Zhyper Chat Interface")
 
                 # LoRA Selection Controls
                 controls = create_lora_controls()
@@ -287,8 +287,8 @@ def build_demo():
         def initialize():
             device = "cuda:0" if torch.cuda.is_available() else "cpu"
             layer_indices = torch.arange(0, 32, dtype=torch.long, device=device)
-            checkpoint_path = "trained_t2l/t2l_demo/hypermod.pt"
-            t2l_dir = os.path.dirname(checkpoint_path)
+            checkpoint_path = "trained_Zhyper/Zhyper_demo/hypermod.pt"
+            zhyper_dir = os.path.dirname(checkpoint_path)
             (
                 args,
                 hypermod,
@@ -299,7 +299,7 @@ def build_demo():
                 task_desc_format_fn,
                 pooling_fn,
             ) = load_hypermod_checkpoint(checkpoint_path, device)
-            peft_config = PeftConfig.from_pretrained(t2l_dir)
+            peft_config = PeftConfig.from_pretrained(zhyper_dir)
             _gen_and_save_lora = partial(
                 gen_and_save_lora,
                 model_dir=model_dir,
@@ -310,6 +310,7 @@ def build_demo():
                 task_desc_format_fn=task_desc_format_fn,
                 pooling_fn=pooling_fn,
                 hypermod=hypermod,
+                model=model
             )
             del model, tokenizer
 

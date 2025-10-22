@@ -7,7 +7,7 @@
 FULL_EVAL="${1:-false}"
 EXIT_ON_DONE="${2:-false}"
 FULL_EVAL_WHEN_SIGNALED="${3:-true}"
-NEW_EVAL_SET="${4:-false}"
+NEW_EVAL_SET="${4:-true}"
 FILTER_CHECKPOINTS="${5:-true}"
 LOAD_STATE="${6:-true}"
 

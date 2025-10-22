@@ -146,7 +146,7 @@ if __name__ == "__main__":
     parser.add_argument("--full-eval", default=False, help="Evaluate outside checkpoints.")
     parser.add_argument("--exit-on-done", default=False, help="Exit after processing current files.")
     parser.add_argument("--full-eval-when-signaled", default=True, help="Switch to full eval when state file requests it.")
-    parser.add_argument("--new-eval-set", default=False, help="Use the new eval set naming.")
+    parser.add_argument("--new-eval-set", default=True, help="Use the new extended eval set.")
     parser.add_argument("--filter-checkpoints", default=True, help="Pick best checkpoint and early stop when applicable.")
     parser.add_argument("--load-state", default=True, help="Load previous watcher state on startup.")
 

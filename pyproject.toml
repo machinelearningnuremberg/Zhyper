@@ -1,8 +1,8 @@
 [project]
-name = "text-to-lora"
+name = "zhyper"
 version = "0.0.1"
-authors = [{ name = "Rujikorn Charakorn" }]
-description = "The code repository for the paper 'Text-to-LoRA: Instant Transformer Adaption' (ICML 2025)."
+authors = [{ name = "Mohamed Hesham Ibrahim Abdalla, Rujikorn Charakorn" }]
+description = "The code repository for the paper 'Zhyper: Factorized Hypernetworks for Conditioned LLM Fine-Tuning."
 readme = "README.md"
 requires-python = ">= 3.10"
 dependencies = [

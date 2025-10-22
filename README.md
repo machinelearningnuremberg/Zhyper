@@ -6,7 +6,7 @@ Install `uv` if you don't have `uv` (see https://docs.astral.sh/uv/getting-start
 
 With `uv` installed, run the following to install the dependencies.
 ```bash
-git clone https://github.com/SakanaAI/text-to-lora.git
+git clone https://https://github.com/machinelearningnuremberg/HyperAlign/tree/z_modeling
 cd text-to-lora
 # make sure you have `uv` installed
 # (see https://docs.astral.sh/uv/getting-started/installation/)
@@ -56,4 +56,8 @@ T2L
 WANDB_MODE=disabled uv run python scripts/eval_hypermod_checkpoint.py --checkpoint_path trained_t2l/gemma_2b_t2l/hypermod.pt --full_eval --use-icl
 ```
 `--use-icl` includes 3-shot in-context examples into evaluation queries.
+
+--- 
+
+This repository was forked from T2L repository (https://github.com/SakanaAI/text-to-lora). We thank the authors for making the source code publicly available. 
 

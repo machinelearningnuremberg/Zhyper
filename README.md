@@ -83,7 +83,7 @@ Base model
 T2L/Zhyper
 ```bash
 # example for T2L trained for gemma-2-2b-it
-WANDB_MODE=disabled uv run python scripts/eval_hypermod_checkpoint.py --checkpoint_path trained_t2l/gemma_2b_t2l/hypermod.pt --full_eval --use-icl --new-eval
+WANDB_MODE=disabled uv run python scripts/eval_hypermod_checkpoint.py --checkpoint_path trained_t2l/gemma_2b_t2l/hypermod.pt --full_eval --use-icl
 ```
 `--use-icl` includes 3-shot in-context examples into evaluation queries.
 

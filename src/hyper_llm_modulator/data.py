@@ -137,7 +137,6 @@ def get_datasets(dataset_names, metadata, tokenizer, sft_mode, is_intx_model, in
                 metadata, tokenizer, sft_mode, is_intx_model, ds_name, ds_kwargs
             )
             logger.debug(f"formatted example: {formatted_dataset[:5]}")
-            #removed_clmns = formatted_dataset.column_names.pop(formatted_dataset.column_names.index("input_prompt"))
             removed_clmns = formatted_dataset.column_names
             tokenized_dataset = formatted_dataset.map(
                 inp_tokenize_fn, batched=True, remove_columns=removed_clmns

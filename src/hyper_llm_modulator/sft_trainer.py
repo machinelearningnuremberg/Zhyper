@@ -294,12 +294,12 @@ def train(
     is_lora_xs = "lora_xs" not in args.exp_setup
 
     autocast_context = ( # for lora_xs autocast breaks training.
-        accelerator.autocast() if is_lora_xs else contextlib.nullcontext()
+        accelerator.autocast if is_lora_xs else contextlib.nullcontext()
     )
     
     for _ in (pbar := tqdm(range(args.epochs), total=num_training_steps)):
         for batch in train_dataloader:
-            with accelerator.accumulate(model), autocast_context:#, accelerator.autocast():
+            with accelerator.accumulate(model), autocast_context():
                 # print(tokenizer.decode(batch["input_ids"][0], skip_special_tokens=False))
                 batch_loss = _get_loss_batch_train(batch)
                 loss = batch_loss["sft_loss"] + batch_loss["generated_w_l2_loss"]

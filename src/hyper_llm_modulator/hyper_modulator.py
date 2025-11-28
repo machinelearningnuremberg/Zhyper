@@ -30,6 +30,7 @@ from hyper_llm_modulator.utils import (
     get_std_lora,
 )
 from hyper_llm_modulator.utils.model_loading import get_emb_model_and_fns
+from hyper_llm_modulator.utils import get_layers_from_args
 
 
 logger = logging.getLogger("")
@@ -654,14 +655,13 @@ class HyperModulator(nn.Module):
                     # split_shapes: {'v_proj': [18432, 8192]} for each target module A, B
                     self.split_shapes[module_name] = [len(x) for x in init_bias]
                     logger.debug(f"split_shapes: {self.split_shapes}")
-                    # print(f"split_shapes: {self.split_shapes}")
-                    # raise RuntimeError()
             del peft_weights
         else:
             self.split_shapes = dict() # only one matrix 
-            # for module_name, head in self.heads.items():
-            #     nn.init.constant_(head.bias, 0.1)
-            #     nn.init.constant_(head.weight, 0.1)
+            if "lora_xs" in self.exp_setup:
+                for module_name, head in self.heads.items():
+                    nn.init.zeros_(head.bias)
+                    nn.init.normal_(head.weight, mean=0, std=0.00001)
             # nn.init.kaiming_uniform_(head.bias, mode="fan_in", nonlinearity="relu") ## TODO: maybe consider
             if "rand_shared" in self.exp_setup:
                 # create random matrices with the largest dimension.
@@ -947,6 +947,7 @@ class HyperModulator(nn.Module):
 
     @torch.no_grad()
     def gen_lora(self, layer_indices, encoded_task_emb, model, convert_vera2lora=False):
+        mapping = {layer.item(): i for i, layer in enumerate(layer_indices)}
         if "rand" in self.exp_setup:
             raise NotImplementedError()
         assert encoded_task_emb.shape[0] == 1, (
@@ -969,14 +970,15 @@ class HyperModulator(nn.Module):
         if self.output_space == "lora":
             for target_module in self.target_modules:
                 for layer_idx in layer_indices:
-                    for module_name in self.module_names[target_module][layer_idx]:
+                    mapped_idx = mapping[layer_idx.item()]
+                    for module_name in self.module_names[target_module][mapped_idx]:
                         if "lora_A" in module_name:
                             output_state_dict[module_name] = (
-                                output_1[target_module][layer_idx].cpu().contiguous()
+                                output_1[target_module][mapped_idx].cpu().contiguous()
                             )
                         elif "lora_B" in module_name:
                             output_state_dict[module_name] = (
-                                output_2[target_module][layer_idx].cpu().contiguous()
+                                output_2[target_module][mapped_idx].cpu().contiguous()
                             )
                         else:
                             raise ValueError(f"Unexpected module name: {module_name}")
@@ -986,29 +988,30 @@ class HyperModulator(nn.Module):
                 # here factorized_delta_w = A, B
                 for target_module in self.target_modules:
                     for layer_idx in layer_indices:
-                        for module_name in self.module_names[target_module][layer_idx]:
+                        mapped_idx = mapping[layer_idx.item()]
+                        for module_name in self.module_names[target_module][mapped_idx]:
                             if "vera_lambda_d" in module_name:
                                 k = module_name.replace("vera_lambda_d", "lora_A.weight")
                                 output_state_dict[k] = (
-                                    output_1[target_module][layer_idx].cpu().contiguous()
+                                    output_1[target_module][mapped_idx].cpu().contiguous()
                                 )
                             elif "vera_lambda_b" in module_name:
                                 k = module_name.replace("vera_lambda_b", "lora_B.weight")
                                 output_state_dict[k] = (
-                                    output_2[target_module][layer_idx].cpu().contiguous()
+                                    output_2[target_module][mapped_idx].cpu().contiguous()
                                 )
             else:
                 # here factorized_delta_w = lambda_d, lambda_b
                 for target_module in self.target_modules:
                     for layer_idx in layer_indices:
-                        for module_name in self.module_names[target_module][layer_idx]:
+                        for module_name in self.module_names[target_module][mapped_idx]:
                             if "vera_lambda_d" in module_name:
                                 output_state_dict[module_name] = (
-                                    output_1[target_module][layer_idx].cpu().contiguous()
+                                    output_1[target_module][mapped_idx].cpu().contiguous()
                                 )
                             elif "vera_lambda_b" in module_name:
                                 output_state_dict[module_name] = (
-                                    output_2[target_module][layer_idx].cpu().contiguous()
+                                    output_2[target_module][mapped_idx].cpu().contiguous()
                                 )
                 # TODO: make it more elegant
                 vera_A = model.base_model.vera_A["default"]
@@ -1230,7 +1233,7 @@ def save_lora(output_state_dict, adapter_config, lora_dir):
 
 
 def create_hypermod(
-    args, peft_type, device, model, layer_indices, task_emb_size, from_scratch=True
+    args, peft_type, device, model, layer_indices, task_emb_size, from_scratch=True, dtype=torch.float32
 ):
     assert args.training_task in ["sft", "recon"], (
         f"Invalid training task: {args.training_task}"
@@ -1291,7 +1294,8 @@ def create_hypermod(
         factorized=getattr(args, "factorized", False),
         delta_w_scaling=getattr(args, "delta_w_scaling", 10000),
         exp_setup=args.exp_setup,
-        z_type=args.z_type
+        z_type=args.z_type,
+        dtype=dtype
     ).to(device)
 
     return hypermod
@@ -1333,7 +1337,7 @@ def load_hypermod_checkpoint(checkpoint_path, device):
     )
     # train to output delta_w for all layers
     layer_indices = torch.tensor(
-        range(len(get_layers(model))), dtype=torch.long, device=device
+        get_layers_from_args(args, model), dtype=torch.long, device=device
     )
 
     task_emb_size = emb_model = emb_tokenizer = task_desc_format_fn = pooling_fn = None

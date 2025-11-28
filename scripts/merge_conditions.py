@@ -146,8 +146,7 @@ def move_descriptions_to_metadata():
     
     print(f"Summary: {success_count}/{total_count} files processed successfully")
 
-DATA_DIR="data"
-# output_type = "command"
+DATA_DIR="cul_data"
 
 descriptions_paths = [f for f in os.listdir(os.path.join(DATA_DIR, "descriptions"))]
 for descriptions_path in descriptions_paths:

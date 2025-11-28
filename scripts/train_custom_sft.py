@@ -27,14 +27,19 @@ from hyper_llm_modulator.utils import (
     add_full_stop,
     get_metadata,
 )
-from hyper_llm_modulator.utils.eval_hypermod import eval_hypermod_checkpoint
+# from hyper_llm_modulator.utils.eval_hypermod import eval_hypermod_checkpoint
 from hyper_llm_modulator.utils.model_loading import get_emb_model_and_fns
 import os
+
+from hyper_llm_modulator.utils import get_layers_from_args
 
 MODEL_INPUT_KEYS = ["input_ids", "attention_mask"]
 
 
 def main(args, accelerator: Accelerator):
+    set_seed(args.seed)
+    if args.n_train_ds < 479:
+        random.shuffle(args.train_ds_names)
     args.train_ds_names = args.train_ds_names[: args.n_train_ds]
     args.use_hypernet = use_hypernet = "hyper" in args.exp_setup
     # get task metadata and save to the corresponding run folder
@@ -48,10 +53,14 @@ def main(args, accelerator: Accelerator):
         save_yaml(vars(args), f"{save_dir}/args.yaml")
     accelerator.wait_for_everyone()
 
-    set_seed(args.seed)
+
     # load peft config
     peft_config = None
-    peft_type = args.exp_setup.split("_")[-1]
+    peft_type = None
+    if "lora" in args.exp_setup: 
+        peft_type = "lora"
+    elif "vera" in args.exp_setup: 
+        peft_type = "vera"
     if peft_type in ["lora", "vera"]:
         # used for both normal training and hypernet training
         # for hypernet, the init weights will be copied as the output bias
@@ -91,7 +100,7 @@ def main(args, accelerator: Accelerator):
         exp_setup=args.exp_setup
     )
     # train to output delta_w for all layers
-    layer_indices = torch.tensor(range(len(get_layers(model))), dtype=torch.long, device=device)
+    layer_indices = torch.tensor(get_layers_from_args(args, model), dtype=torch.long, device=device)
     # NOTE: the module_names is needed for saving generated lora or vera to lora format
     # this is required for using vllm during evaluation
     is_intx_model = tokenizer.chat_template is not None
@@ -101,6 +110,7 @@ def main(args, accelerator: Accelerator):
     logger.debug(f"is_intx_model: {is_intx_model}")
     # logger.debug(f"Tokenizer: {tokenizer}")
     logger.debug(f"layer_indices: {layer_indices}")
+    logger.info(f"layer_indices: {layer_indices}")
 
     ##############################################################################
     # emb model and hypermod
@@ -111,6 +121,25 @@ def main(args, accelerator: Accelerator):
     use_explicit_emb_model = False
     pooling_fn = None
 
+    #### LoRA-XS
+    # https://github.com/MohammadrezaBanaei/LoRA-XS/blob/main/utils/initialization_utils.py
+    if "lora_xs" in args.exp_setup:
+        # z_hyper full = hyper lora with lora_xs
+        # z_hyper diag = Zhyper with lora_xs
+        from peft.utils import _get_submodules
+        from hyper_llm_modulator.utils.utils import replace_by_svd, \
+                                                    replace_module_weights, \
+                                                    forward_latent_lora_xs, get_delta_weight_lora_xs, init_module_weights
+        import types
+        key_list = [key for key, _ in model.named_modules()]
+        for key in key_list:
+            target_module_found = any(key.endswith(target_key) for target_key in peft_config.target_modules)
+            if target_module_found:
+                _, target, _ = _get_submodules(model, key)
+                A_SVD, B_SVD = replace_by_svd(weight=target.weight.T, rank=args.r)
+                # )
+                replace_module_weights(target.lora_B.default, B_SVD.T, renormalize=False)
+                replace_module_weights(target.lora_A.default, A_SVD.T, renormalize=False)
     hypermod = None
     if use_hypernet:
         task_emb_size = None
@@ -161,11 +190,20 @@ def main(args, accelerator: Accelerator):
 
     ##############################################################################
     # Training
-    ##############################################################################
-    if "rand" in args.exp_setup: # putting this in model init does not work with DDP.
+    ##############################################################################      
+
+    # freezing all lora weights.
+    if ("rand" in args.exp_setup) or ("lora_xs" in args.exp_setup): # putting this in model init does not work with DDP.
         for name, param in model.named_parameters():
             if not "hypermod" in name:
                 param.requires_grad = False
+
+    if len(layer_indices) != len(get_layers(model)):
+        for name, param in model.named_parameters():
+            if "lora" in name and "layers" in name:
+                layer_idx = int(name.split("layers.")[-1].split(".")[0])
+                if layer_idx not in layer_indices:
+                    param.requires_grad = False
 
     wd = args.weight_decay
     optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=args.lr, weight_decay=wd)

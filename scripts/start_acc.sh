@@ -58,6 +58,10 @@ if [[ "$DATASET_TYPE" = *"align"* ]]; then
     EXTRA_ARGS+=" --keep_only_best=True"
 fi
 
+# if [[ "$EXP_NAME" = *"lora_xs"* ]]; then
+#     EXTRA_ARGS+=" --max_grad_norm=1000000"
+# fi
+
 case "$MODEL_NAME" in
     mistral)
         MODEL_DIR="mistralai/Mistral-7B-Instruct-v0.2"
@@ -73,7 +77,14 @@ case "$MODEL_NAME" in
         exit 1
         ;;
 esac
-if [[ "$EXP_NAME" == lora_* && "$DATASET_TYPE" = *"task"* ]]; then
+
+if [ "$EMBED" = "gte" ]; then
+    EMBED_DIR="Alibaba-NLP/gte-large-en-v1.5"
+else
+    EMBED_DIR="$MODEL_DIR"
+fi
+
+if [[ "$EXP_NAME" == lora_* && "$DATASET_TYPE" = *"task"* && "$EXP_NAME" != lora_xs ]]; then
     BENCHMARK_NAME="${EXP_NAME#*_}"
     EVAL_DS_INFO="{${BENCHMARK_NAME}: {descriptions: [PLACEHOLDER]}}"
     accelerate launch \
@@ -88,9 +99,12 @@ if [[ "$EXP_NAME" == lora_* && "$DATASET_TYPE" = *"task"* ]]; then
       --run_name=${RUN_NAME} \
       --r=${MAT_RANK} \
       --exp_setup=oracle_lora \
+      --model_dir=${MODEL_DIR} \
+      --emb_model=${EMBED_DIR} \
       --train_ds_names="${BENCHMARK_NAME}" \
-      --eval_ds_info="${EVAL_DS_INFO}"
-    uv run python scripts/run_eval.py --model-dir ${MODEL_DIR} \
+      --eval_ds_info="${EVAL_DS_INFO}" \
+      --layers=${LAYERS}
+    python scripts/run_eval.py --model-dir ${MODEL_DIR} \
         --lora-dirs ${SAVE_DIR} \
         --tasks ${BENCHMARK_NAME} \
         --save-results
@@ -109,7 +123,8 @@ elif [[ "$EXP_NAME" == lora_* && "$DATASET_TYPE" = *"align"* ]]; then
       --run_name=${RUN_NAME} \
       --r=${MAT_RANK} \
       --train_ds_names="cul_${CULTURE_NAME}" \
-      --eval_ds_info="${EVAL_DS_INFO}"
+      --eval_ds_info="${EVAL_DS_INFO}" \
+      --layers=${LAYERS}
 elif [ "$EXP_NAME" = "mt_lora" ]; then
     accelerate launch \
     --num_processes $(( 4 * $COUNT_NODE )) \
@@ -120,7 +135,8 @@ elif [ "$EXP_NAME" = "mt_lora" ]; then
     scripts/train_custom_sft.py \
     ${CONFIG_FILE} \
     --model_dir=${MODEL_DIR} \
-    --n_train_ds=479 \
+    --emb_model=${EMBED_DIR} \
+    --n_train_ds=${N_DS} \
     --lr=2.5e-5 \
     --warmup_frac=0.2 \
     --n_ds_per_batch=${DS_PER_BATCH} \
@@ -132,10 +148,11 @@ elif [ "$EXP_NAME" = "mt_lora" ]; then
     --label_smoothing=0.1 \
     --weight_decay=1e-3 \
     --neftune_noise_alpha=5 \
-    --val_batch_size=32 \
+    --val_batch_size=${VAL_BATCH_SIZE} \
     --save_dir=${SAVE_DIR} \
     --run_name=${RUN_NAME} \
     --r=${MAT_RANK} \
+    --layers=${LAYERS} \
     ${EXTRA_ARGS}
 elif [ "$MODEL_NAME" = "mistral" ]; then
     accelerate launch \
@@ -147,14 +164,14 @@ elif [ "$MODEL_NAME" = "mistral" ]; then
     scripts/train_custom_sft.py \
     ${CONFIG_FILE} \
     --model_dir=${MODEL_DIR} \
-    --emb_model=Alibaba-NLP/gte-large-en-v1.5 \
+    --emb_model=${EMBED_DIR} \
     --warmup_frac=0.2 \
     --lr=2.5e-5 \
     --n_points_per_task=1 \
     --grad_accum_steps=1 \
     --epochs=${N_EPOCHS} \
     --n_descs_per_ds=128 \
-    --n_train_ds=479 \
+    --n_train_ds=${N_DS} \
     --exp_setup="${EXP_NAME}" \
     --encoder_type=linear \
     --l2_reg_generated_w=1e-3 \
@@ -166,6 +183,9 @@ elif [ "$MODEL_NAME" = "mistral" ]; then
     --r=${MAT_RANK} \
     --n_ds_per_batch=${DS_PER_BATCH} \
     --z_type=${Z_TYPE} \
+    --layers=${LAYERS} \
+    --val_batch_size=${VAL_BATCH_SIZE} \
+    --seed=${SEED} \
     ${EXTRA_ARGS}
 elif [ "$MODEL_NAME" = "gemma" ]; then
     accelerate launch \
@@ -177,19 +197,21 @@ elif [ "$MODEL_NAME" = "gemma" ]; then
     scripts/train_custom_sft.py \
     ${CONFIG_FILE} \
     --model_dir=${MODEL_DIR} \
-    --emb_model=Alibaba-NLP/gte-large-en-v1.5 \
+    --emb_model=${EMBED_DIR} \
     --warmup_frac=0.2 --lr=2.5e-5  \
     --n_points_per_task=1 --grad_accum_steps=1 \
-    --epochs=${N_EPOCHS} --n_descs_per_ds=128 --n_train_ds=479 \
+    --epochs=${N_EPOCHS} --n_descs_per_ds=128 --n_train_ds=${N_DS} \
     --exp_setup="${EXP_NAME}" --encoder_type=linear \
     --l2_reg_generated_w=1e-3 --label_smoothing=0.1 \
     --neftune_noise_alpha=5 --weight_decay=1e-2 \
-    --hypernet_latent_size=512 --head_in_size=2048 --val_batch_size=32 \
+    --val_batch_size=${VAL_BATCH_SIZE} \
     --save_dir=${SAVE_DIR} \
     --run_name=${RUN_NAME} \
     --r=${MAT_RANK} \
     --n_ds_per_batch=${DS_PER_BATCH}  \
     --z_type=${Z_TYPE} \
+    --layers=${LAYERS} \
+    --seed=${SEED} \
     ${EXTRA_ARGS}
     # accelerate launch \
     # --num_processes $(( 4 * $COUNT_NODE )) \
@@ -221,21 +243,23 @@ elif [ "$MODEL_NAME" = "llama" ]; then
     scripts/train_custom_sft.py \
     ${CONFIG_FILE} \
     --model_dir=${MODEL_DIR} \
-    --emb_model=Alibaba-NLP/gte-large-en-v1.5 \
+    --emb_model=${EMBED_DIR} \
     --warmup_frac=0.2 --lr=2.5e-5  \
     --n_points_per_task=1 --grad_accum_steps=1 \
-    --epochs=${N_EPOCHS} --n_descs_per_ds=128 --n_train_ds=479 \
+    --epochs=${N_EPOCHS} --n_descs_per_ds=128 --n_train_ds=${N_DS} \
     --exp_setup="${EXP_NAME}" --encoder_type=linear \
     --l2_reg_generated_w=1e-3 --label_smoothing=0.1 \
     --neftune_noise_alpha=5 --weight_decay=1e-2 \
-    --hypernet_latent_size=512 --head_in_size=2048 \
-    --val_batch_size=32 \
+    --val_batch_size=${VAL_BATCH_SIZE} \
     --save_dir=${SAVE_DIR} \
     --run_name=${RUN_NAME} \
     --r=${MAT_RANK} \
     --n_ds_per_batch=${DS_PER_BATCH} \
     --z_type=${Z_TYPE} \
+    --layers=${LAYERS} \
+    --seed=${SEED} \
     ${EXTRA_ARGS}
+    # --hypernet_latent_size=512 --head_in_size=2048 \
 else
     echo "Unknown MODEL_NAME: $MODEL_NAME"
     exit 1

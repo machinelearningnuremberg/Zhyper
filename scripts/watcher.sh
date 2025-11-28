@@ -29,6 +29,8 @@ export OUTLINES_CACHE_DIR="$OUTLINES_BASE/$RANK_ID"
 
 source .venv/bin/activate
 
+echo "SAVE_DIR=${SAVE_DIR} watcher.sh ${FULL_EVAL} ${EXIT_ON_DONE} ${FULL_EVAL_WHEN_SIGNALED} ${NEW_EVAL_SET} ${FILTER_CHECKPOINTS} ${LOAD_STATE}"
+
 python watcher.py \
   --full-eval=${FULL_EVAL} \
   --exit-on-done=${EXIT_ON_DONE} \

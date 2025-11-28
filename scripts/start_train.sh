@@ -8,7 +8,14 @@
 
 module load intelmpi
 # --exclusive
-echo "Running with run_name=$RUN_NAME save_dir=$SAVE_DIR model=$MODEL_NAME exp=$EXP_NAME dataset=$DATASET_TYPE r=$MAT_RANK"
+echo "Running with run_name=$RUN_NAME save_dir=$SAVE_DIR model=$MODEL_NAME exp=$EXP_NAME dataset=$DATASET_TYPE r=$MAT_RANK DS_PER_BATCH=$DS_PER_BATCH Z_TYPE=$Z_TYPE EMBED=$EMBED N_DS=$N_DS SEED=$SEED"
+
+# --full-eval --exit-on-done --full-eval-when-signaled --new-eval-set --filter-checkpoints --load-state
+# only run watcher when not running align/culture or an indv. lora run. 
+if [[ ( "$DATASET_TYPE" != *"align"* && "$EXP_NAME" != lora_* ) || "$EXP_NAME" == "lora_xs" ]]; then
+    sbatch --export=ALL --output="$SBATCH_OUTFILE" scripts/watcher.sh false false true true true true
+fi
+
 
 export FI_EFA_FORK_SAFE=1
 export FI_LOG_LEVEL=1

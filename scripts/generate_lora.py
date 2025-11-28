@@ -19,6 +19,7 @@ from hyper_llm_modulator.hyper_modulator import (
     save_lora,
 )
 from hyper_llm_modulator.utils.model_loading import get_emb_model_and_fns
+from hyper_llm_modulator.utils import get_layers_from_args
 
 
 def add_full_stop(s):
@@ -81,7 +82,7 @@ if __name__ == "__main__":
         task_desc_format_fn,
         pooling_fn,
     ) = load_hypermod(hypermod_dir, device)
-    layer_indices = range(len(get_layers(model)))
+    layer_indices = get_layers_from_args(args, model)
     layer_indices = torch.tensor(layer_indices, dtype=torch.long, device=device)
     emb_size = emb_model.config.hidden_size
 

@@ -1,5 +1,6 @@
 from collections import defaultdict
 from contextlib import contextmanager
+import contextlib
 from glob import glob
 import logging
 import os
@@ -289,10 +290,16 @@ def train(
         val_freq = max(1, int(num_training_steps * pct_val_freq))
     else:
         val_freq = int(args.val_freq)
+
+    is_lora_xs = "lora_xs" not in args.exp_setup
+
+    autocast_context = ( # for lora_xs autocast breaks training.
+        accelerator.autocast() if is_lora_xs else contextlib.nullcontext()
+    )
     
     for _ in (pbar := tqdm(range(args.epochs), total=num_training_steps)):
         for batch in train_dataloader:
-            with accelerator.accumulate(model), accelerator.autocast():
+            with accelerator.accumulate(model), autocast_context:#, accelerator.autocast():
                 # print(tokenizer.decode(batch["input_ids"][0], skip_special_tokens=False))
                 batch_loss = _get_loss_batch_train(batch)
                 loss = batch_loss["sft_loss"] + batch_loss["generated_w_l2_loss"]
@@ -302,6 +309,11 @@ def train(
 
                 optimizer.zero_grad()
                 accelerator.backward(loss)
+                # for name, p in hypermod.named_parameters():
+                #     if p.grad is None:
+                #         logger.info(f"[NO GRAD] {name} {p.requires_grad}")
+                #     else:
+                #         logger.info(f"[GRAD] {name} grad_norm={p.grad.norm().item():.4e} {p.requires_grad}")
                 if accelerator.sync_gradients:
                     grad_norm = accelerator.clip_grad_norm_(model.parameters(), args.max_grad_norm)
                 optimizer.step()
@@ -561,8 +573,9 @@ def generate_and_hook_delta_w(
 ):
     hook_handles = []
     factorized_delta_w = dict()
-    # Unwrap DDP-wrapped model if needed for attribute access
+    mapping = {layer.item(): i for i, layer in enumerate(layer_indices)}
     for target_module in target_modules:
+        # with torch.amp.autocast(device_type="cuda", enabled=False):
         factorized_delta_w[target_module] = hypermod.get_delta_weights(
             layer_indices.repeat_interleave(bs),
             target_module,
@@ -574,7 +587,9 @@ def generate_and_hook_delta_w(
         lora_A, lora_B = factorized_delta_w[target_module]
         # print(lora_A.shape)
         for layer_index in layer_indices:
-            start_indices, end_indices = layer_index * bs, (layer_index + 1) * bs
+            mapped_idx = mapping[layer_index.item()]
+            start_indices, end_indices = mapped_idx * bs, (mapped_idx + 1) * bs
+            # print(start_indices, end_indices)
             handles = add_lora_hooks(
                 model = model,
                 module_names=[target_module],

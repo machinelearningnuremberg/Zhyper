@@ -52,6 +52,22 @@ def get_layers(model):
         return get_layers(model.model)
     return model.layers
 
+def get_layers_from_args(args, model):
+    len_layers = len(get_layers(model))
+    all_layers = range(len_layers)
+    if not hasattr(args, 'layers'):
+        return all_layers
+    if args.layers == None or args.layers == "all":
+        return all_layers
+    if "last_" in args.layers:
+        val = int(args.layers.split("last_")[-1])
+        return range(len_layers - val, len_layers)
+    if "first_" in args.layers:
+        val = int(args.layers.split("first_")[-1])
+        return range(0, val)
+    if args.layers == "every_4th":
+        return range(0, len_layers, 4)
+
 
 def get_num_params(model):
     total_params = 0
@@ -115,3 +131,101 @@ def generate_simplex_points(n_points, dimension):
 
 def get_end_points(dimension):
     return torch.eye(dimension, dtype=torch.float)
+
+country2nationality = {
+    "egypt": "egyptian",
+    "europe": "european",
+    "asia": "asian",
+    "italy": "italian",
+    "india": "indian",
+    "latinamerica": "latin american",
+    "mexico": "mexican",
+    "middleeast": "middle eastern",
+    "southafrica": "south african",
+    "turkey": "turkish",
+    "uk": "british",
+    "ph": "filipino",
+    "argentina": "argentinian",
+    "germany": "german",
+    "china": "chinese",
+    "japan": "japanese",
+    "africa": "african",
+    "america": "american",
+    "russia": "russian",
+    "balkans": "balkan",
+    "france": "french",
+    "australia": "australian",
+    "canada": "canadian",
+    "thailand": "thai",
+    "lebanon": "labenese",
+    "saudiarabia": "saudi",
+    "pakistan": "pakistani",
+    "ukraine": "ukranian",
+    "nigeria": "nigerian",
+    "brasil": "brazilian",
+    "hongkong": "hongkonger",
+    "peru": "peruvian",
+    "indonesia": "indonesian",
+    "spain": "spanish"
+}
+
+def _parse_subreddit_name(subreddit_name):
+    # gets the subredit postfix 
+    # AskAnAfrica = african
+    # AskAChinese = chinese
+    # PERU = peru
+    subreddit_name = subreddit_name.lower()
+    if "ask" in subreddit_name:
+        if "askan" in subreddit_name:
+            subreddit_postfix = subreddit_name.split("askan")[-1]
+        elif "aska" in subreddit_name and "asia" not in subreddit_name and "argentina" not in subreddit_name:
+            subreddit_postfix =  subreddit_name.split("aska")[-1]
+        # elif subreddit_name[-1] == "s":
+        #     subreddit_postfix =  subreddit_name.split("ask")[-1][: -1]
+        else:
+            subreddit_postfix =  subreddit_name.split("ask")[-1]
+    else:
+        subreddit_postfix = subreddit_name
+    return subreddit_postfix
+
+def subreddit_to_nationality(subreddit_name):
+    subreddit_name = subreddit_name.lower()
+    subreddit_postfix = _parse_subreddit_name(subreddit_name)
+    if subreddit_postfix not in ["asia", "argentina"] and ("aska" in subreddit_name):
+        # case where subreddit name starts with AskA or AskAn
+        nationality = subreddit_postfix
+    else:
+        nationality = country2nationality[subreddit_postfix]
+    return nationality.title()
+
+# reverse
+def subreddit_to_country(subreddit_name, map_to_metada_names=False):
+    nationality2country = {v:k for k, v in country2nationality.items()}
+    subreddit_name = subreddit_name.lower()
+    nat = subreddit_to_nationality(subreddit_name)
+    country = nationality2country[nat.lower()].title()
+    # cases when the country name on subreddit is different:
+    if country == "Brasil":
+        country = "Brazil"
+    elif country == "Saudiarabia":
+        country = "Saudi Arabia"
+    elif country == "Ph":
+        country = "Philippines"
+    elif country == "Hongkong":
+        country = "Hong Kong"
+    if map_to_metada_names:
+        if country == "Hong Kong":
+            country = "HongKong"
+        if country == "Philippines":
+            country = "PH"
+        if country == "Saudi Arabia":
+            country = "SaudiArabia"
+        if country == "Uk":
+            country = "UK"
+        elif country == "America":
+            country = "US"
+        elif country == "Middleeast":
+            country = "MiddleEast"
+        else: 
+            country = country.title()
+    return country

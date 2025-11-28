@@ -1,7 +1,7 @@
 [project]
 name = "zhyper"
 version = "0.0.1"
-authors = [{ name = "Mohamed Hesham Ibrahim Abdalla, Rujikorn Charakorn" }]
+authors = [{ name = "" }]
 description = "The code repository for the paper 'Zhyper: Factorized Hypernetworks for Conditioned LLM Fine-Tuning."
 readme = "README.md"
 requires-python = ">= 3.10"
@@ -27,6 +27,7 @@ dependencies = [
     "evalplus",
     "gradio>=5.29.0",
     "vllm==0.5.4",
+    "scikit-learn>=1.7.2",
 ]
 
 [build-system]
@@ -46,3 +47,9 @@ typeCheckingMode = "off"
 
 [tool.uv.sources]
 evalplus = { git = "https://github.com/evalplus/evalplus", rev = "1895d2f6aa8895044a7cf69defc24bd57695e885" }
+pyairports = { git = "https://github.com/NICTA/pyairports.git" }
+
+[dependency-groups]
+default = [
+    "pyairports",
+]

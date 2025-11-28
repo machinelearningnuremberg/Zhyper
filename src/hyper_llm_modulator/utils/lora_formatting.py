@@ -216,18 +216,20 @@ def get_peft_module_names(model, target_modules, layer_indices):
         target_module: [[] for _ in range(len(layer_indices))]
         for target_module in target_modules
     }
+    mapping = {layer.item(): i for i, layer in enumerate(layer_indices)}
     for k in get_peft_model_state_dict(model):
         if ("lora" not in k) and ("vera_lambda" not in k):
             continue
         layer_idx = int(k.split("layers.")[-1].split(".")[0])
         if layer_idx in layer_indices:
+            mapped_idx = mapping[layer_idx]
             for target_module in target_modules:
                 if target_module in k:
                     # if "vera_lambda" in k:
                     #     # replace the name to match the lora naming convention
                     #     k = k.replace("vera_lambda_d", "lora_A.weight")
                     #     k = k.replace("vera_lambda_b", "lora_B.weight")
-                    module_names[target_module][layer_idx].append(k)
+                    module_names[target_module][mapped_idx].append(k)
                     break
     return module_names
 

@@ -3,11 +3,22 @@ EXP_NAME="${2:-hyper_lora}"
 DATASET_TYPE="${3:-task}"
 MAT_RANK="${4:-8}"
 Z_TYPE="${5:-full}"
+EMBED="${6:-gte}"
+N_DS="${7:-479}"
+LAYERS="${8:-all}"
+SEED="${9:-42}"
 
 # Set a safe default; lower it for larger ranks to avoid OOM
-DS_PER_BATCH=${DS_PER_BATCH:-8}
-if [ "$MAT_RANK" -gt 16 ]; then
+DS_PER_BATCH=8
+
+if [ "$MAT_RANK" -ge 16 ]; then
     DS_PER_BATCH=4
+fi
+
+VAL_BATCH_SIZE=32
+if [ "$MAT_RANK" -ge 32 ]; then
+    DS_PER_BATCH=2
+    VAL_BATCH_SIZE=8
 fi
 
 uuid=$(uuidgen | cut -c1-8)  # generates a random UUID
@@ -24,6 +35,11 @@ export SAVE_DIR
 export MAT_RANK
 export DS_PER_BATCH
 export Z_TYPE
+export EMBED
+export N_DS
+export LAYERS
+export SEED
+export VAL_BATCH_SIZE
 
 
 source .venv/bin/activate
@@ -34,8 +50,7 @@ else
     SBATCH_OUTFILE="$LOG_DIR_COMPUTED/%x_%j.out"
 fi
 
+export SBATCH_OUTFILE
+
+
 sbatch --export=ALL --output="$SBATCH_OUTFILE" scripts/start_train.sh
-#   --full-eval --exit-on-done --full-eval-when-signaled --new-eval-set --filter-checkpoints --load-state
-if [[ "$DATASET_TYPE" != *"align"* && "$EXP_NAME" != lora_* ]]; then
-    sbatch --export=ALL --output="$SBATCH_OUTFILE" scripts/watcher.sh false false true true true true
-fi

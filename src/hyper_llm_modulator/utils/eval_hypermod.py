@@ -10,6 +10,7 @@ from glob import glob
 import torch
 import pandas as pd
 import wandb
+import shutil
 
 from hyper_llm_modulator.hyper_modulator import load_hypermod_checkpoint, save_lora
 from hyper_llm_modulator.res_aggregator import aggregrate_results_and_save_to_file
@@ -19,6 +20,7 @@ from hyper_llm_modulator.utils.lora_formatting import convert_qkv_gate_up_lora_t
 from hyper_llm_modulator.utils.model_loading import get_tokenizer
 from hyper_llm_modulator.utils.preprocessing import preprocess_result
 from hyper_llm_modulator.utils.utils import embed_texts
+from hyper_llm_modulator.utils import get_layers_from_args
 from hyper_llm_modulator.vllm_eval import eval
 
 logger = logging.getLogger("")
@@ -37,7 +39,10 @@ BENCHMARK_TASK_INFO_EXTENDED = {
     }
 
 
-def eval_hypermod_checkpoint(checkpoint_path, device, curstep, full_eval, use_icl=False, new_eval=False):
+def eval_hypermod_checkpoint(checkpoint_path, device, curstep, full_eval, 
+                                                                use_icl=False, 
+                                                                new_eval=False, 
+                                                                delete_gen_loras_after_eval=True):
     # peft_adapter_path in case of using z. Here we read the LORA weights and add it to the model.
     # load checkpoint
     if new_eval:
@@ -59,7 +64,7 @@ def eval_hypermod_checkpoint(checkpoint_path, device, curstep, full_eval, use_ic
         load_hypermod_checkpoint(checkpoint_path, device)
     )
     chat_template = tokenizer.chat_template
-    layer_indices = torch.tensor(range(len(get_layers(model))), dtype=torch.long, device=device)
+    layer_indices = torch.tensor(get_layers_from_args(args, model), dtype=torch.long, device=device)
     save_dir = os.path.dirname(checkpoint_path)
     train_metadata = get_metadata(args.train_ds_names, args.use_per_task_emb)
     val_metadata = get_metadata(args.eval_ds_info, args.use_per_task_emb)
@@ -118,6 +123,14 @@ def eval_hypermod_checkpoint(checkpoint_path, device, curstep, full_eval, use_ic
             use_icl,
         )
         print(results)
+
+        if delete_gen_loras_after_eval:
+            gen_lora_path = all_lora_dirs[eval_ds]
+            if isinstance(gen_lora_path, list):
+                for path in gen_lora_path:
+                    shutil.rmtree(path)
+            else:
+                shutil.rmtree(gen_lora_path)
     # aggregate eval results
     df = aggregrate_results_and_save_to_file(
         base_model_dir=args.model_dir,
@@ -241,7 +254,7 @@ def generate_loras_for_tasks_from_descs(
     ds_descs.update({ds: val_metadata[ds]["descriptions"] for ds in val_metadata})
 
     #splits = ["train_descs", "eval_descs", "other_train_descs", "random_descs"]
-    splits = ["eval_descs"] # limit splits of publication
+    splits = ["eval_descs"] # limit splits for publication
     all_lora_dirs = {eval_task: [] for eval_task in eval_ds_info}
     save_dicts = {eval_task: [] for eval_task in eval_ds_info}
     for eval_task, eval_info in eval_ds_info.items():

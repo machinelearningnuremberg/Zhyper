@@ -106,7 +106,15 @@ class TrainingArguments:
     training_task: Literal["sft", "recon"] = field(default="sft", metadata={"help": "SFT vs reconstruction training."})
     model_dir: str = field(default=None, metadata={"help": "The model directory."})
     emb_model: str = field(default="", metadata={"help": "The embedding model."})
-    exp_setup: Literal["lora", "vera", "hyper_lora", "z_hyper_lora", "hyper_vera", "rand_shared_z_hyper_lora", "rand_shared_learnable_z_hyper_lora"] = field(
+    exp_setup: Literal["lora", 
+                       "vera", 
+                       "lora_xs",
+                       "hyper_lora", 
+                       "z_hyper_lora", 
+                       "hyper_vera", 
+                       "rand_shared_z_hyper_lora", 
+                       "rand_shared_learnable_z_hyper_lora",
+                       "z_hyper_lora_xs"] = field(
         default=None, metadata={"help": "The finetuning setup."}
     )
     ds_type: Literal["task", "align"] = field(
@@ -151,6 +159,7 @@ class TrainingArguments:
             "Can only be used when autoreg_gen is True."
         },
     )
+    layers: List[int] | str = field(default="all", metadata={"help": "Number of layers."})
     learnable_output_offset: bool = field(
         default=False,
         metadata={"help": "Whether to use learnable A and B offsets in the HyperLoRA model."},
@@ -205,7 +214,7 @@ class TrainingArguments:
     val_batch_size: int = field(default=64, metadata={"help": "The evaluation batch size."})
     warmup_frac: float = field(default=0.2, metadata={"help": "The fraction of warmup steps."})
     neftune_noise_alpha: float = field(default=5, metadata={"help": "The noise alpha for NEFTune."})
-    max_grad_norm: float = field(default=1.0, metadata={"help": "The maximum gradient norm."})
+    max_grad_norm: Optional[float] = field(default=1.0, metadata={"help": "The maximum gradient norm."})
     logging_freq: int = field(default=100, metadata={"help": "The wandb logging frequency."})
     val_freq: int = field(default=10000, metadata={"help": "The validation frequency."})
     model_watch_freq: int = field(default=5000, metadata={"help": "The model watching frequency."})
